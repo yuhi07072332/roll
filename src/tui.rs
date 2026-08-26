@@ -1,8 +1,13 @@
 use crossterm::{
-    QueueableCommand, event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, poll, read}, execute, terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen}
+    QueueableCommand, cursor, execute,
+    style::{self, Attribute, Print},
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
-use std::{io::{self, Write}, time::Duration};
+use std::io::{self, Stdout, Write};
+use std::cmp::{min, max};
+
+use super::ContentView;
 
 #[derive(Debug)]
 pub struct Terminal {
@@ -16,11 +21,7 @@ impl Terminal {
 
         terminal::enable_raw_mode()?;
 
-        execute!(
-            io::stdout(),
-            EnterAlternateScreen,
-            Clear(ClearType::All)
-        )?;
+        execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All))?;
 
         Ok(Terminal { width, height })
     }
@@ -46,39 +47,39 @@ impl Drop for Terminal {
     }
 }
 
-pub fn print_events() -> io::Result<()> {
-    execute!(
-         std::io::stdout(),
-         EnableBracketedPaste,
-         EnableFocusChange,
-         EnableMouseCapture
-    )?;
-    loop {
-        // `poll()` waits for an `Event` for a given time period
-        if poll(Duration::from_millis(500))? {
-            // It's guaranteed that the `read()` won't block when the `poll()`
-            // function returns `true`
-            match read()? {
-                Event::FocusGained => println!("FocusGained\r"),
-                Event::FocusLost => println!("FocusLost\r"),
-                Event::Key(KeyEvent{code: KeyCode::Esc, ..}) => break,
-                Event::Key(event) => println!("{:?}\r", event),
-                Event::Mouse(event) => println!("{:?}\r", event),
-                Event::Paste(data) => println!("Pasted {:?}\r", data),
-                Event::Resize(width, height) => println!("New size {}x{}\r", width, height),
-            }
-        } else {
-            // Timeout expired and no `Event` is available
-        }
-    }
+pub fn draw_content(
+    stdout: &mut Stdout,
+    terminal: &Terminal,
+    content_view: &ContentView,
+) -> io::Result<()> {
+    let (buffer, row_offset) = (&content_view.buffer, content_view.row_offset);
+    let file_rows = content_view.buffer.len();
 
-    execute!(
-        std::io::stdout(),
-        DisableBracketedPaste,
-        DisableFocusChange,
-        DisableMouseCapture
-    )?;
+    stdout.queue(cursor::MoveTo(0, 0))?;
+    for row in 0..min(terminal.height() as usize, file_rows) {
+        let file_row: usize = row + row_offset;
+        stdout
+            .queue(Print(&buffer[file_row]))?
+            .queue(cursor::MoveToNextLine(1))?;
+    }
 
     Ok(())
 }
 
+pub fn draw_status_line(
+    stdout: &mut Stdout,
+    terminal: &Terminal,
+    content_view: &ContentView,
+) -> io::Result<()> {
+    let file_rows = content_view.buffer.len();
+    let current_row = content_view.row_offset;
+
+    stdout
+        .queue(cursor::MoveTo(0, terminal.height() - 1))?
+        .queue(style::SetAttribute(Attribute::Reverse))?
+        .queue(Print("Esc to quit"))?
+        .queue(cursor::MoveToColumn(terminal.width() - 8))?
+        .queue(Print(format!("{:>3}:{:>3}", current_row, file_rows)))?;
+
+    Ok(())
+}
