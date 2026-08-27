@@ -31,7 +31,7 @@ impl Renderer {
     pub fn draw_frame(
         &mut self,
         view: &BufferView,
-        size: ScreenSize
+        size: ScreenSize,
     ) -> io::Result<()> {
         clear_screen(&mut self.stdout)?;
         self.draw_view(view, size)?;
@@ -39,7 +39,11 @@ impl Renderer {
         self.stdout.flush()
     }
 
-    fn draw_view(&mut self, view: &BufferView, size: ScreenSize) -> io::Result<()> {
+    fn draw_view(
+        &mut self,
+        view: &BufferView,
+        size: ScreenSize,
+    ) -> io::Result<()> {
         let ScreenSize(_, height) = size;
 
         self.stdout.queue(cursor::MoveTo(0, 0))?;
@@ -58,13 +62,15 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_status_line(&mut self, view: &BufferView, size: ScreenSize) -> io::Result<()> {
+    fn draw_status_line(
+        &mut self,
+        view: &BufferView,
+        size: ScreenSize,
+    ) -> io::Result<()> {
         let ScreenSize(width, height) = size;
         let row_index = view.row_offset();
-        let percentage = row_index
-            .checked_div(view.line_count())
-            .unwrap_or(0)
-            * 100;
+        let percentage =
+            row_index.checked_div(view.line_count()).unwrap_or(0) * 100;
 
         self.stdout
             .queue(cursor::MoveTo(0, height.saturating_sub(1)))?

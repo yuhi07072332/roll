@@ -12,7 +12,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::{Color, Stylize};
 
 use buffer::{Buffer, BufferView};
-use render::{ScreenSize, RenderConfig, Renderer};
+use render::{RenderConfig, Renderer, ScreenSize};
 use terminal::Terminal;
 
 const FRAME_TIMEOUT: Duration = Duration::from_millis(250);
@@ -41,7 +41,7 @@ pub fn run() -> io::Result<()> {
         line_numbers: args.line_numbers,
     };
 
-    let buffer  = if let Some(file_path) = args.file_path {
+    let buffer = if let Some(file_path) = args.file_path {
         Buffer::from_file(&file_path)?
     } else {
         Buffer::from_stdin()?
@@ -57,10 +57,11 @@ fn run_loop(
     render_config: RenderConfig,
 ) -> io::Result<()> {
     let mut terminal = Terminal::init()?;
-    let mut renderer = Renderer::new(render_config, );
+    let mut renderer = Renderer::new(render_config);
 
     loop {
-        renderer.draw_frame(view, ScreenSize(terminal.width, terminal.height))?;
+        renderer
+            .draw_frame(view, ScreenSize(terminal.width, terminal.height))?;
 
         if event::poll(FRAME_TIMEOUT)?
             && handle_event(event::read()?, view, &mut terminal)

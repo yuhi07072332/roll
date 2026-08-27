@@ -75,8 +75,10 @@ impl<'a> BufferView<'a> {
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
-        self.row_offset =
-            cmp::min(self.row_offset + lines, self.line_count().saturating_sub(1));
+        self.row_offset = cmp::min(
+            self.row_offset + lines,
+            self.line_count().saturating_sub(1),
+        );
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
