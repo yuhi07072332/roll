@@ -7,7 +7,9 @@ use crossterm::{
 };
 
 use super::BufferView;
-use crate::terminal::TerminalGuard;
+
+#[derive(Clone, Copy)]
+pub struct ScreenSize(pub u16, pub u16);
 
 pub struct RenderConfig {
     pub line_numbers: bool,
@@ -16,39 +18,33 @@ pub struct RenderConfig {
 pub struct Renderer {
     stdout: Stdout,
     config: RenderConfig,
-    width: u16,
-    height: u16
 }
 
 impl Renderer {
-    pub fn new(config: RenderConfig, terminal: &TerminalGuard) -> Self {
+    pub fn new(config: RenderConfig) -> Self {
         Self {
             stdout: io::stdout(),
             config,
-            width: terminal.width(),
-            height: terminal.height()
         }
     }
 
     pub fn draw_frame(
         &mut self,
         view: &BufferView,
-        terminal: &TerminalGuard,
+        size: ScreenSize
     ) -> io::Result<()> {
-        let (width, height) = terminal.size();
-        self.width = width;
-        self.height = height;
-
         clear_screen(&mut self.stdout)?;
-        self.draw_view(view)?;
-        self.draw_status_line(view)?;
+        self.draw_view(view, size)?;
+        self.draw_status_line(view, size)?;
         self.stdout.flush()
     }
 
-    fn draw_view(&mut self, view: &BufferView) -> io::Result<()> {
+    fn draw_view(&mut self, view: &BufferView, size: ScreenSize) -> io::Result<()> {
+        let ScreenSize(_, height) = size;
+
         self.stdout.queue(cursor::MoveTo(0, 0))?;
-        for (row_number, row) in view
-            .lines_from_offset(self.height as usize - 1)
+        for (row_number, row) in
+            view.visible_lines(height.saturating_sub(1u16) as usize)
         {
             if self.config.line_numbers {
                 self.stdout
@@ -62,24 +58,27 @@ impl Renderer {
         Ok(())
     }
 
-    fn draw_status_line(&mut self, view: &BufferView) -> io::Result<()> {
+    fn draw_status_line(&mut self, view: &BufferView, size: ScreenSize) -> io::Result<()> {
+        let ScreenSize(width, height) = size;
         let row_index = view.row_offset();
-        let percentage =
-            ((row_index as f64 / view.len() as f64) * 100.0) as usize;
+        let percentage = row_index
+            .checked_div(view.line_count())
+            .unwrap_or(0)
+            * 100;
 
         self.stdout
-            .queue(cursor::MoveTo(0, self.height - 1))?
+            .queue(cursor::MoveTo(0, height.saturating_sub(1)))?
             .queue(style::SetAttribute(Attribute::Reverse))?
-            .queue(Print(format!("{: <1$}", "", self.width as usize - 1)))?;
+            .queue(Print(format!("{: <1$}", "", width as usize - 1)))?;
 
         self.stdout
             .queue(cursor::MoveToColumn(0))?
             .queue(Print("Esc to quit"))?
-            .queue(cursor::MoveToColumn(self.width - 15))?
+            .queue(cursor::MoveToColumn(width.saturating_sub(15)))?
             .queue(Print(format!(
                 "{:>3}:{:>3} ({:>3}%)",
                 row_index + 1,
-                view.len(),
+                view.line_count(),
                 percentage
             )))?
             .queue(style::SetAttribute(Attribute::Reset))?;

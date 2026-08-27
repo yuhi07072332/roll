@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    if let Some(err) = roll::run().err() {
-        roll::print_error(&err.to_string());
+    if let Err(err) = roll::run() {
+        roll::print_error(err);
         return ExitCode::FAILURE;
     }
 

@@ -1,16 +1,21 @@
-use std::{cmp, fmt, fs::{self, File}, io::{self, BufRead, BufReader, Read}, path::Path};
+use std::{
+    cmp,
+    fs::{self, File},
+    io::{self, BufRead},
+    path::Path,
+};
 
 type Line = Vec<u8>;
 
 pub struct Buffer {
     data: Vec<Line>,
-    is_reading: bool,
+    is_reading: bool, // TODO:
 }
 pub struct BufferView<'a> {
-    pub buffer: &'a Buffer,
+    buffer: &'a Buffer,
 
     row_offset: usize,
-    col_offset: usize,
+    col_offset: usize, // TODO:
 }
 
 impl Buffer {
@@ -27,15 +32,17 @@ impl Buffer {
         // TODO: spawn a new thread to read stdin instead of blocking the main thread
         Ok(Buffer {
             data: read_lines(io::BufReader::new(io::stdin().lock()))?,
-            is_reading: false
+            is_reading: false,
         })
     }
 
-    pub fn lines(&self) -> usize { self.data.len() }
+    pub fn lines(&self) -> usize {
+        self.data.len()
+    }
 }
 
 impl<'a> BufferView<'a> {
-    pub fn new(buffer: &'a Buffer) -> BufferView {
+    pub fn new(buffer: &'a Buffer) -> BufferView<'a> {
         BufferView {
             buffer,
             row_offset: 0,
@@ -51,21 +58,25 @@ impl<'a> BufferView<'a> {
         self.col_offset
     }
 
-    pub fn len(&self) -> usize {
+    pub fn line_count(&self) -> usize {
         self.buffer.lines()
     }
 
-    pub fn lines_from_offset(&self, take: usize) 
-    -> impl Iterator<Item = (usize, &Line)> {
-        self.buffer.data.iter().enumerate().skip(self.row_offset).take(take)
+    pub fn visible_lines(
+        &self,
+        take: usize,
+    ) -> impl Iterator<Item = (usize, &Line)> {
+        self.buffer
+            .data
+            .iter()
+            .enumerate()
+            .skip(self.row_offset)
+            .take(take)
     }
 
-
     pub fn scroll_down(&mut self, lines: usize) {
-        self.row_offset = cmp::min(
-            self.row_offset + lines,
-            self.len().saturating_sub(1)
-        );
+        self.row_offset =
+            cmp::min(self.row_offset + lines, self.line_count().saturating_sub(1));
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
@@ -74,14 +85,9 @@ impl<'a> BufferView<'a> {
 }
 
 fn read_lines(reader: impl BufRead) -> io::Result<Vec<Line>> {
-    // OPTIMIZE: maybe
-
+    //TODO: parse raw bytes instead of using String
     reader
         .lines()
-        .map(|line_result| { 
-            line_result.map(|line| {
-                Vec::from(line.as_bytes())
-            })
-        })
+        .map(|line| line.map(String::into_bytes))
         .collect()
 }

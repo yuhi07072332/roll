@@ -4,46 +4,26 @@ use crossterm::{
         self, Clear, ClearType, DisableLineWrap, EnableLineWrap,
         EnterAlternateScreen, LeaveAlternateScreen,
     },
-    event::{ Event },
 };
 use std::{io, panic};
 
 #[derive(Debug)]
-pub struct TerminalGuard {
-    width: u16,
-    height: u16,
+pub struct Terminal {
+    pub width: u16,
+    pub height: u16,
 }
 
-impl TerminalGuard {
-    pub fn init() -> io::Result<TerminalGuard> {
+impl Terminal {
+    pub fn init() -> io::Result<Terminal> {
         let (width, height) = terminal::size()?;
 
         initialize_terminal()?;
 
-        Ok(TerminalGuard { width, height })
-    }
-
-    pub fn width(&self) -> u16 {
-        self.width
-    }
-
-    pub fn height(&self) -> u16 {
-        self.height
-    }
-
-    pub fn size(&self) -> (u16, u16) {
-        (self.width, self.height)
-    }
-
-    pub fn on_event(&mut self, event: Event) {
-        if let Event::Resize(width, height) = event {
-            self.width = width;
-            self.height = height;
-        }
+        Ok(Terminal { width, height })
     }
 }
 
-impl Drop for TerminalGuard {
+impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = restore_terminal();
     }
