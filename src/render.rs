@@ -1,4 +1,4 @@
-use std::io::{self, Stdout, Write};
+use std::{cmp, io::{self, Stdout, Write}};
 
 use crossterm::{
     QueueableCommand, cursor,
@@ -68,7 +68,9 @@ impl Renderer {
                 ))?;
             }
 
-            self.stdout.write_all(row)?;
+            self.stdout.write_all(&row[..
+                cmp::min(view.width(), row.len())
+            ])?;
             self.stdout.queue(cursor::MoveToNextLine(1))?;
         }
 
@@ -82,13 +84,19 @@ impl Renderer {
     ) -> io::Result<()> {
         let ScreenSize(width, height) = size;
         let row_index = view.row_offset();
-        let percentage =
-            row_index.checked_div(view.line_count()).unwrap_or(0) * 100;
+        let percentage = row_index
+            .checked_mul(100)
+            .and_then(|n| n.checked_div(view.line_count()))
+            .unwrap_or(0);
 
         self.stdout
             .queue(cursor::MoveTo(0, height.saturating_sub(1)))?
             .queue(style::SetAttribute(Attribute::Reverse))?
-            .queue(Print(format!("{: <1$}", "", width as usize - 1)))?;
+            .queue(Print(format!(
+                "{: <1$}",
+                "",
+                (width as usize).saturating_sub(1)
+            )))?;
 
         self.stdout
             .queue(cursor::MoveToColumn(0))?

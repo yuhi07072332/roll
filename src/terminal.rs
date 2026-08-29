@@ -1,8 +1,7 @@
 use crossterm::{
     execute,
     terminal::{
-        self, Clear, ClearType, DisableLineWrap, EnableLineWrap,
-        EnterAlternateScreen, LeaveAlternateScreen,
+        self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
 use std::{io, panic};
@@ -48,7 +47,7 @@ fn initialize_terminal() -> io::Result<()> {
 
 fn restore_terminal() -> io::Result<()> {
     terminal::disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, EnableLineWrap)?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
 
     Ok(())
 }
