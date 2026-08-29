@@ -2,16 +2,19 @@ mod buffer;
 mod render;
 mod terminal;
 
-use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{io, path::PathBuf, time::Duration};
+
+use anyhow::{Result, bail};
 
 use clap::Parser;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::style::{Color, Stylize};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    style::{Color, Stylize},
+};
 
 use buffer::{Buffer, BufferView};
+use crossterm::tty::IsTty;
 use render::{RenderConfig, Renderer, ScreenSize};
 use terminal::Terminal;
 
@@ -35,7 +38,7 @@ pub fn print_error(message: impl std::fmt::Display) {
     eprintln!("{} {message}", "error:".with(Color::Red).bold());
 }
 
-pub fn run() -> io::Result<()> {
+pub fn run() -> Result<()> {
     let args = Args::parse();
     let render_config = render::RenderConfig {
         line_numbers: args.line_numbers,
@@ -44,29 +47,36 @@ pub fn run() -> io::Result<()> {
     let buffer = if let Some(file_path) = args.file_path {
         Buffer::from_file(&file_path)?
     } else {
+        if io::stdin().is_tty() {
+            bail!("missing file or piped stdin");
+        }
         Buffer::from_stdin()?
     };
 
-    let mut view = BufferView::new(&buffer);
+    run_loop(&buffer, render_config)?;
 
-    run_loop(&mut view, render_config)
+    Ok(())
 }
 
-fn run_loop(
-    view: &mut BufferView,
-    render_config: RenderConfig,
-) -> io::Result<()> {
+fn run_loop(buffer: &Buffer, render_config: RenderConfig) -> io::Result<()> {
     let mut terminal = Terminal::init()?;
+    let mut view = BufferView::new(
+        buffer,
+        terminal.width as usize,
+        terminal.height as usize,
+    );
     let mut renderer = Renderer::new(render_config);
+    let mut needs_exit: bool = false;
 
-    loop {
-        renderer
-            .draw_frame(view, ScreenSize(terminal.width, terminal.height))?;
+    while !needs_exit {
+        let screen_size = ScreenSize(terminal.width, terminal.height);
+        renderer.resize_view(&mut view, screen_size);
+        renderer.draw_frame(&view, screen_size)?;
 
-        if event::poll(FRAME_TIMEOUT)?
-            && handle_event(event::read()?, view, &mut terminal)
-        {
-            break;
+        if event::poll(FRAME_TIMEOUT)? {
+            handle_event(event::read()?, &mut view, &mut terminal, || {
+                needs_exit = true
+            })
         }
     }
 
@@ -79,7 +89,8 @@ fn handle_event(
     event: Event,
     view: &mut BufferView,
     terminal: &mut Terminal,
-) -> bool {
+    on_exit: impl FnOnce(),
+) {
     fn is_ctrl(key: KeyEvent) -> bool {
         key.modifiers == KeyModifiers::CONTROL
     }
@@ -89,36 +100,36 @@ fn handle_event(
     match event {
         Event::Key(key @ KeyEvent { code, .. }) => match code {
             // quit
-            KeyCode::Esc => return true,
+            KeyCode::Char('q') | KeyCode::Esc => on_exit(),
 
             // move one file line
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Enter => {
-                view.scroll_down(1);
+                view.scroll_down(1)
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                view.scroll_up(1);
-            }
+            KeyCode::Char('k') | KeyCode::Up => view.scroll_up(1),
+
+            // move left or right
+            KeyCode::Char('l') | KeyCode::Right => view.scroll_right(1),
+            KeyCode::Char('h') | KeyCode::Left => view.scroll_left(1),
 
             // move half page
-            KeyCode::Char('d') if is_ctrl(key) => {
-                view.scroll_down(half_page);
-            }
+            KeyCode::Char('d') if is_ctrl(key) => view.scroll_down(half_page),
             KeyCode::PageDown => view.scroll_down(half_page),
-            KeyCode::Char('u') if is_ctrl(key) => {
-                view.scroll_up(half_page);
-            }
+            KeyCode::Char('u') if is_ctrl(key) => view.scroll_up(half_page),
             KeyCode::PageUp => view.scroll_up(half_page),
+
+            KeyCode::Home => view.scroll_to_col_begin(),
+            KeyCode::End => view.scroll_to_col_end(),
+            KeyCode::Char('g') => view.scroll_to_row_begin(),
+            KeyCode::Char('G') => view.scroll_to_row_end(),
 
             _ => (),
         },
 
-        // 我承认这个确实有点蠢
         Event::Resize(width, height) => {
             terminal.width = width;
             terminal.height = height;
         }
         _ => (),
     }
-
-    false
 }

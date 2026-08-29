@@ -40,12 +40,7 @@ fn set_panic_hook() {
 
 fn initialize_terminal() -> io::Result<()> {
     terminal::enable_raw_mode()?;
-    execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        DisableLineWrap,
-        Clear(ClearType::All),
-    )?;
+    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All),)?;
 
     set_panic_hook();
     Ok(())

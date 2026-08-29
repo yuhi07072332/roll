@@ -2,7 +2,7 @@ use std::io::{self, Stdout, Write};
 
 use crossterm::{
     QueueableCommand, cursor,
-    style::{self, Attribute, Print},
+    style::{self, Attribute, Print, PrintStyledContent, Stylize},
     terminal::{Clear, ClearType},
 };
 
@@ -28,31 +28,44 @@ impl Renderer {
         }
     }
 
+    pub fn resize_view(&self, view: &mut BufferView, screen_size: ScreenSize) {
+        let ScreenSize(width, height) = screen_size;
+        let width = if self.config.line_numbers {
+            (width as usize).saturating_sub(Self::line_number_width(view) + 1)
+        } else {
+            width as usize
+        };
+        let height = (height as usize).saturating_sub(1);
+        view.set_size(width, height);
+    }
+
     pub fn draw_frame(
         &mut self,
         view: &BufferView,
         size: ScreenSize,
     ) -> io::Result<()> {
         clear_screen(&mut self.stdout)?;
-        self.draw_view(view, size)?;
+        self.draw_view(view)?;
         self.draw_status_line(view, size)?;
         self.stdout.flush()
     }
 
-    fn draw_view(
-        &mut self,
-        view: &BufferView,
-        size: ScreenSize,
-    ) -> io::Result<()> {
-        let ScreenSize(_, height) = size;
+    fn line_number_width(view: &BufferView) -> usize {
+        (view.line_count().checked_ilog10().unwrap_or(0) + 1) as usize
+    }
 
+    fn draw_view(&mut self, view: &BufferView) -> io::Result<()> {
         self.stdout.queue(cursor::MoveTo(0, 0))?;
-        for (row_number, row) in
-            view.visible_lines(height.saturating_sub(1u16) as usize)
-        {
+        for (row_number, row) in view.visible_lines() {
             if self.config.line_numbers {
-                self.stdout
-                    .queue(Print(format!("{:>3} ", row_number + 1)))?;
+                self.stdout.queue(PrintStyledContent(
+                    format!(
+                        "{:>width$} ",
+                        row_number + 1,
+                        width = Self::line_number_width(view),
+                    )
+                    .dim(),
+                ))?;
             }
 
             self.stdout.write_all(row)?;
