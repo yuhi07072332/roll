@@ -89,37 +89,42 @@ fn handle_event(
     terminal: &mut Terminal,
     on_exit: impl FnOnce(),
 ) {
-    fn is_ctrl(key: KeyEvent) -> bool {
-        key.modifiers == KeyModifiers::CONTROL
-    }
-
     let half_page = view.height() / 2;
 
     match event {
-        Event::Key(key @ KeyEvent { code, .. }) => match code {
-            // quit
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            ..
+        }) => match code {
             KeyCode::Char('q') | KeyCode::Esc => on_exit(),
 
-            // move one file line
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Enter => {
                 view.scroll_down(1)
             }
             KeyCode::Char('k') | KeyCode::Up => view.scroll_up(1),
 
-            // move left or right
             KeyCode::Char('l') | KeyCode::Right => view.scroll_right(1),
             KeyCode::Char('h') | KeyCode::Left => view.scroll_left(1),
 
-            // move half page
-            KeyCode::Char('d') if is_ctrl(key) => view.scroll_down(half_page),
             KeyCode::PageDown => view.scroll_down(half_page),
-            KeyCode::Char('u') if is_ctrl(key) => view.scroll_up(half_page),
             KeyCode::PageUp => view.scroll_up(half_page),
 
             KeyCode::Home => view.set_col_offset(0),
             KeyCode::End => view.scroll_to_col_end(),
             KeyCode::Char('g') => view.set_row_offset(0),
             KeyCode::Char('G') => view.scroll_to_row_end(),
+
+            _ => (),
+        },
+
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::CONTROL,
+            ..
+        }) => match code {
+            KeyCode::Char('d') => view.scroll_down(half_page),
+            KeyCode::Char('u') => view.scroll_up(half_page),
 
             _ => (),
         },

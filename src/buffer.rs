@@ -57,11 +57,11 @@ impl Buffer {
         Some(line)
     }
 
-    pub fn lines(&self, from: usize, take: usize) -> LinesIter {
+    pub fn lines<'a>(&'a self, from: usize, take: usize) -> LinesIter<'a> {
         LinesIter {
             buf: self,
             current_index: from,
-            last_index: from + take
+            last_index: from + take,
         }
     }
 
@@ -92,21 +92,22 @@ fn scan_line_starts(data: &[u8]) -> Vec<usize> {
 pub struct LinesIter<'a> {
     buf: &'a Buffer,
     current_index: usize,
-    last_index: usize
+    last_index: usize,
 }
 
 impl<'a> Iterator for LinesIter<'a> {
     type Item = (usize, &'a [u8]);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index > self.last_index { return None; }
+        if self.current_index > self.last_index {
+            return None;
+        }
 
         let line = (self.current_index, self.buf.line_at(self.current_index)?);
         self.current_index += 1;
         Some(line)
     }
 }
-
 
 pub struct BufferView<'a> {
     buffer: &'a Buffer,
@@ -167,7 +168,9 @@ impl<'a> BufferView<'a> {
             .map(|(index, line)| {
                 let line = if self.col_offset < line.len() {
                     &line[self.col_offset..]
-                } else { &[] };
+                } else {
+                    &[]
+                };
 
                 (index, line)
             })
@@ -226,10 +229,8 @@ impl<'a> BufferView<'a> {
         cmp::min(offset, max_offset)
     }
 
-    fn update_max_line_width(& mut self, lines: LinesIter<'a>) {
-        self.max_line_width = lines
-            .map(|(_, line)| line.len())
-            .max()
-            .unwrap_or(0)
+    fn update_max_line_width(&mut self, lines: LinesIter<'a>) {
+        self.max_line_width =
+            lines.map(|(_, line)| line.len()).max().unwrap_or(0)
     }
 }

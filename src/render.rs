@@ -1,10 +1,13 @@
-use std::{cmp, io::{self, Stdout, Write}};
+use std::{
+    cmp,
+    io::{self, Stdout, Write},
+};
 
 use crossterm::{
-    QueueableCommand, cursor,
-    style::{self, Attribute, Print, PrintStyledContent, Stylize},
-    terminal::{Clear, ClearType},
+    Command, QueueableCommand, cursor, style::{self, Attribute, Print, PrintStyledContent, Stylize}, terminal::{Clear, ClearType}
 };
+
+const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
 
 use super::BufferView;
 
@@ -18,6 +21,8 @@ pub struct RenderConfig {
 pub struct Renderer {
     stdout: Stdout,
     config: RenderConfig,
+
+    frame_buf: Vec<u8>
 }
 
 impl Renderer {
@@ -25,6 +30,7 @@ impl Renderer {
         Self {
             stdout: io::stdout(),
             config,
+            frame_buf: Vec::with_capacity(FRAME_BUFFER_INIT_CAPACITY)
         }
     }
 
@@ -44,10 +50,31 @@ impl Renderer {
         view: &BufferView,
         size: ScreenSize,
     ) -> io::Result<()> {
-        clear_screen(&mut self.stdout)?;
+        self.frame_buf.clear();
+
+        self.clear_screen()?;
         self.draw_view(view)?;
         self.draw_status_line(view, size)?;
+        self.flush()
+    }
+
+    fn queue(&mut self, buf: &[u8]) -> io::Result<&mut Self> {
+        self.frame_buf.write_all(buf)?;
+        Ok(self)
+    }
+
+    fn queue_cmd(&mut self, command: impl Command) -> io::Result<&mut Self> {
+        self.frame_buf.queue(command)?;
+        Ok(self)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stdout.write_all(&self.frame_buf)?;
         self.stdout.flush()
+    }
+
+    fn clear_screen(&mut self) -> io::Result<()> {
+        self.queue_cmd(Clear(ClearType::All)).map(|_| ())
     }
 
     fn line_number_width(view: &BufferView) -> usize {
@@ -55,10 +82,10 @@ impl Renderer {
     }
 
     fn draw_view(&mut self, view: &BufferView) -> io::Result<()> {
-        self.stdout.queue(cursor::MoveTo(0, 0))?;
+        self.queue_cmd(cursor::MoveTo(0, 0))?;
         for (row_number, row) in view.visible_lines() {
             if self.config.line_numbers {
-                self.stdout.queue(PrintStyledContent(
+                self.queue_cmd(PrintStyledContent(
                     format!(
                         "{:>width$} ",
                         row_number + 1,
@@ -68,10 +95,8 @@ impl Renderer {
                 ))?;
             }
 
-            self.stdout.write_all(&row[..
-                cmp::min(view.width(), row.len())
-            ])?;
-            self.stdout.queue(cursor::MoveToNextLine(1))?;
+            self.queue(&row[..cmp::min(view.width(), row.len())])?;
+            self.queue_cmd(cursor::MoveToNextLine(1))?;
         }
 
         Ok(())
@@ -89,32 +114,25 @@ impl Renderer {
             .and_then(|n| n.checked_div(view.line_count()))
             .unwrap_or(0);
 
-        self.stdout
-            .queue(cursor::MoveTo(0, height.saturating_sub(1)))?
-            .queue(style::SetAttribute(Attribute::Reverse))?
-            .queue(Print(format!(
+        self.queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))?
+            .queue_cmd(style::SetAttribute(Attribute::Reverse))?
+            .queue_cmd(Print(format!(
                 "{: <1$}",
                 "",
                 (width as usize).saturating_sub(1)
             )))?;
 
-        self.stdout
-            .queue(cursor::MoveToColumn(0))?
-            .queue(Print("Esc to quit"))?
-            .queue(cursor::MoveToColumn(width.saturating_sub(15)))?
-            .queue(Print(format!(
+        self.queue_cmd(cursor::MoveToColumn(0))?
+            .queue_cmd(Print("Esc to quit"))?
+            .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
+            .queue_cmd(Print(format!(
                 "{:>3}:{:>3} ({:>3}%)",
                 row_index + 1,
                 view.line_count(),
                 percentage
             )))?
-            .queue(style::SetAttribute(Attribute::Reset))?;
+            .queue_cmd(style::SetAttribute(Attribute::Reset))?;
 
         Ok(())
     }
-}
-
-fn clear_screen(stdout: &mut Stdout) -> io::Result<()> {
-    stdout.queue(Clear(ClearType::All))?;
-    Ok(())
 }
