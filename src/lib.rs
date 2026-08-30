@@ -2,7 +2,12 @@ mod buffer;
 mod render;
 mod terminal;
 
-use std::{io, path::PathBuf, time::Duration};
+use std::{
+    io::{self, Read},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
+};
 
 use anyhow::{Result, bail};
 
@@ -10,18 +15,16 @@ use clap::Parser;
 
 use crossterm::{
     event::{
-        self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent,
+        self, Event as TermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent,
         MouseEventKind,
     },
     style::{Color, Stylize},
 };
 
-use buffer::{Buffer, BufferView};
+use buffer::{BYTES_PER_READ, Buffer, BufferView};
 use crossterm::tty::IsTty;
-use render::{RenderConfig, Renderer, ScreenSize};
+use render::{RenderConfig, SourceName, Renderer, ScreenSize};
 use terminal::Terminal;
-
-const FRAME_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Parser, Debug)]
 #[command(name = "roll")]
@@ -37,6 +40,15 @@ struct Args {
     file_path: Option<PathBuf>,
 }
 
+enum Event {
+    Terminal(TermEvent),
+    BufferRead {
+        n: usize,
+        bytes: Box<[u8; BYTES_PER_READ]>,
+    },
+    BufferEof
+}
+
 pub fn print_error(message: impl std::fmt::Display) {
     eprintln!("{} {message}", "error:".with(Color::Red).bold());
 }
@@ -44,29 +56,42 @@ pub fn print_error(message: impl std::fmt::Display) {
 pub fn run() -> Result<()> {
     let args = Args::parse();
 
+    let (tx, rx) = mpsc::channel::<Event>();
+
     let source_name;
+
     let buffer = if let Some(file_path) = args.file_path {
-        source_name = String::from(file_path.to_str().unwrap_or("(unknown)"));
+        source_name = SourceName::FileName(
+            String::from(file_path.to_str().unwrap_or("(unknown)"))
+        );
         Buffer::from_file(&file_path)?
     } else {
         if io::stdin().is_tty() {
             bail!("missing file or piped stdin");
         }
-        source_name = String::from("(stdin)");
+        source_name = SourceName::Stdin;
+        let stdin_sender = tx.clone();
+        thread::spawn(move || send_from_stdin(stdin_sender));
         Buffer::from_stdin()?
     };
+
+    thread::spawn(move || send_from_terminal_event(tx));
 
     let render_config = render::RenderConfig {
         line_numbers: args.line_numbers,
         source_name,
     };
 
-    run_loop(buffer, render_config)?;
+    run_loop(buffer, render_config, rx)?;
 
     Ok(())
 }
 
-fn run_loop(mut buffer: Buffer, render_config: RenderConfig) -> io::Result<()> {
+fn run_loop(
+    mut buffer: Buffer,
+    render_config: RenderConfig,
+    receiver: Receiver<Event>,
+) -> Result<()> {
     let mut terminal = Terminal::init()?;
     let mut view = BufferView::new(
         terminal.width as usize,
@@ -77,29 +102,61 @@ fn run_loop(mut buffer: Buffer, render_config: RenderConfig) -> io::Result<()> {
     let mut needs_exit: bool = false;
 
     while !needs_exit {
-        buffer.poll();
+        match receiver.recv()? {
+            Event::BufferRead { n, bytes } => {
+                buffer.on_buffer_read(n, bytes);
+            }
+            Event::Terminal(event) => {
+                handle_terminal_event(
+                    event,
+                    &mut buffer,
+                    &mut view,
+                    &mut terminal,
+                    || needs_exit = true,
+                );
+            }
+            Event::BufferEof => {
+                buffer.on_buffer_eof();
+            }
+        }
 
         let screen_size = ScreenSize(terminal.width, terminal.height);
         renderer.resize_view(&mut view, screen_size, &buffer);
         renderer.draw_frame(&buffer, &view, screen_size)?;
-
-        if event::poll(FRAME_TIMEOUT)? {
-            handle_event(
-                event::read()?,
-                &buffer,
-                &mut view,
-                &mut terminal,
-                || needs_exit = true,
-            )
-        }
     }
 
     Ok(())
 }
 
-fn handle_event(
-    event: Event,
-    buffer: &Buffer,
+fn send_from_stdin(tx: Sender<Event>) -> Result<()> {
+    let mut stdin = io::stdin().lock();
+
+    loop {
+        let mut buf = [0u8; BYTES_PER_READ];
+        let n = stdin.read(&mut buf)?;
+
+        if n == 0 {
+            break;
+        }
+        tx.send(Event::BufferRead {
+            n,
+            bytes: Box::new(buf),
+        })?;
+    }
+
+    tx.send(Event::BufferEof)?;
+    Ok(())
+}
+
+fn send_from_terminal_event(tx: Sender<Event>) -> Result<()> {
+    loop {
+        tx.send(Event::Terminal(event::read()?))?;
+    }
+}
+
+fn handle_terminal_event(
+    event: TermEvent,
+    buffer: &mut Buffer,
     view: &mut BufferView,
     terminal: &mut Terminal,
     on_exit: impl FnOnce(),
@@ -107,7 +164,7 @@ fn handle_event(
     let half_page = view.height() / 2;
 
     match event {
-        Event::Key(KeyEvent {
+        TermEvent::Key(KeyEvent {
             code,
             modifiers: KeyModifiers::NONE,
             ..
@@ -134,7 +191,7 @@ fn handle_event(
         },
 
         // with control key
-        Event::Key(KeyEvent {
+        TermEvent::Key(KeyEvent {
             code,
             modifiers: KeyModifiers::CONTROL,
             ..
@@ -145,13 +202,13 @@ fn handle_event(
             _ => (),
         },
 
-        Event::Mouse(MouseEvent { kind, .. }) => match kind {
+        TermEvent::Mouse(MouseEvent { kind, .. }) => match kind {
             MouseEventKind::ScrollDown => view.scroll_down(3, buffer),
             MouseEventKind::ScrollUp => view.scroll_up(3, buffer),
             _ => (),
         },
 
-        Event::Resize(width, height) => {
+        TermEvent::Resize(width, height) => {
             terminal.width = width;
             terminal.height = height;
         }

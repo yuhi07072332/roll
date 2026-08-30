@@ -16,9 +16,14 @@ use crate::buffer::{Buffer, BufferView};
 #[derive(Clone, Copy)]
 pub struct ScreenSize(pub u16, pub u16);
 
+pub enum SourceName {
+    FileName(String),
+    Stdin
+}
+
 pub struct RenderConfig {
     pub line_numbers: bool,
-    pub source_name: String,
+    pub source_name: SourceName,
 }
 
 struct FrameBuf(Vec<u8>);
@@ -89,7 +94,7 @@ impl Renderer {
 
         self.clear_screen()?;
         self.draw_view(buffer, view)?;
-        self.draw_status_line(view, buffer.line_count(), size)?;
+        self.draw_status_line(view, buffer, size)?;
         self.frame_buf.flush(&mut self.stdout)
     }
 
@@ -130,15 +135,20 @@ impl Renderer {
     fn draw_status_line(
         &mut self,
         view: &BufferView,
-        buffer_lines: usize,
+        buffer: &Buffer,
         size: ScreenSize,
     ) -> io::Result<()> {
         let ScreenSize(width, height) = size;
         let row_index = view.row_offset();
         let percentage = row_index
             .checked_mul(100)
-            .and_then(|n| n.checked_div(buffer_lines))
+            .and_then(|n| n.checked_div(buffer.line_count()))
             .unwrap_or(0);
+        let source_name = match &self.config.source_name {
+            SourceName::FileName(filename) => filename,
+            SourceName::Stdin if buffer.is_reading() => "(stdin: reading)",
+            SourceName::Stdin => "(stdin)"
+        };
 
         self.frame_buf
             .queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))?
@@ -147,12 +157,12 @@ impl Renderer {
 
         self.frame_buf
             .queue_cmd(cursor::MoveToColumn(0))?
-            .queue_cmd(Print(&self.config.source_name))?
+            .queue_cmd(Print(source_name))?
             .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
             .queue_cmd(Print(format!(
                 "({:>3}/{:>3}) {:>3}%",
                 row_index + 1,
-                buffer_lines,
+                buffer.line_count(),
                 percentage
             )))?
             .queue_cmd(style::SetAttribute(Attribute::Reset))?;

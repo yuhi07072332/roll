@@ -1,22 +1,17 @@
 use std::{
     cmp,
     fs::{self},
-    io::{self, Read},
+    io,
     path::Path,
-    sync::mpsc::{self, Receiver, Sender, TryRecvError},
-    thread,
 };
 
-use anyhow::Result;
-
-const BYTES_PER_READ: usize = 512;
+pub const BYTES_PER_READ: usize = 512;
 
 #[derive(Default)]
 pub struct Buffer {
     data: Vec<u8>,
     line_starts: Vec<usize>,
-
-    stdin_receiver: Option<Receiver<(usize, [u8; BYTES_PER_READ])>>,
+    is_reading: bool,
 }
 
 impl Buffer {
@@ -25,42 +20,18 @@ impl Buffer {
         let mut line_starts: Vec<usize> = Vec::new();
         scan_line_starts(&mut line_starts, &data, 0);
 
-        Ok(Buffer {
-            data,
-            line_starts,
-            stdin_receiver: None,
-        })
+        Ok(Buffer { data, line_starts, is_reading: false})
     }
 
     pub fn from_stdin() -> io::Result<Buffer> {
-        let (tx, rx) = mpsc::channel();
-
-        thread::spawn(move || {
-            let _ = send_from_stdin(tx);
-        });
-
         Ok(Buffer {
             data: Vec::new(),
             line_starts: Vec::new(),
-            stdin_receiver: Some(rx),
+            is_reading: true
         })
     }
 
-    pub fn poll(&mut self) {
-        loop {
-            let Some(rx) = &self.stdin_receiver else {
-                return;
-            };
-
-            match rx.try_recv() {
-                Ok((n, buf)) => self.append_bytes(&buf[..n]),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.stdin_receiver = None;
-                }
-            }
-        }
-    }
+    pub fn is_reading(&self) -> bool { self.is_reading }
 
     pub fn line_at(&self, index: usize) -> Option<&[u8]> {
         let begin_idx = *self.line_starts.get(index)?;
@@ -81,6 +52,19 @@ impl Buffer {
 
         Some(line)
     }
+
+    pub fn on_buffer_read(
+        &mut self,
+        n: usize,
+        bytes: Box<[u8; BYTES_PER_READ]>,
+    ) {
+        self.append_bytes(&bytes.as_ref()[..n]);
+    }
+
+    pub fn on_buffer_eof(&mut self) {
+        self.is_reading = false
+    }
+
 
     pub fn lines<'a>(&'a self, from: usize, take: usize) -> LinesIter<'a> {
         LinesIter {
@@ -126,22 +110,6 @@ fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize) {
     {
         out.push(data.len());
     }
-}
-
-fn send_from_stdin(tx: Sender<(usize, [u8; BYTES_PER_READ])>) -> Result<()> {
-    let mut stdin = io::stdin().lock();
-
-    loop {
-        let mut buf = [0u8; BYTES_PER_READ];
-        let n = stdin.read(&mut buf)?;
-
-        if n == 0 {
-            break;
-        }
-        tx.send((n, buf))?;
-    }
-
-    Ok(())
 }
 
 /// similar to `BufRead::lines()`
