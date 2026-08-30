@@ -1,40 +1,66 @@
 use std::{
     cmp,
+    sync::mpsc::{self, Sender, Receiver, TryRecvError},
     fs::{self},
     io::{self, Read},
     path::Path,
+    thread,
 };
+
+use anyhow::Result;
+
+const BYTES_PER_READ: usize = 512;
 
 #[derive(Default)]
 pub struct Buffer {
     data: Vec<u8>,
     line_starts: Vec<usize>,
-    is_reading: bool,
+
+    stdin_receiver: Option<Receiver<(usize, [u8;BYTES_PER_READ])>>
 }
 
 impl Buffer {
     pub fn from_file(path: &Path) -> io::Result<Buffer> {
         let data = fs::read(path)?;
-        let line_starts = scan_line_starts(&data);
+        let mut line_starts: Vec<usize> = Vec::new(); 
+        scan_line_starts(&mut line_starts, &data, 0);
 
         Ok(Buffer {
             data,
             line_starts,
-            is_reading: false,
+            stdin_receiver: None
         })
     }
 
     pub fn from_stdin() -> io::Result<Buffer> {
-        // TODO: spawn a new thread to read stdin instead of blocking the main thread
-        let mut data: Vec<u8> = Vec::new();
-        io::stdin().lock().read_to_end(&mut data)?;
-        let line_starts = scan_line_starts(&data);
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || { 
+            let _ = send_from_stdin(tx);
+        });
 
         Ok(Buffer {
-            data,
-            line_starts,
-            is_reading: false,
+            data: Vec::new(),
+            line_starts: Vec::new(),
+            stdin_receiver: Some(rx)
         })
+    }
+
+    pub fn poll(&mut self) {
+        loop {
+            let Some(rx) = &self.stdin_receiver else {
+                return;
+            };
+
+            match rx.try_recv() {
+                Ok((n, buf)) => self.append_bytes(&buf[..n]),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.stdin_receiver = None;
+                    break;
+                }
+            }
+        }
     }
 
     pub fn line_at(&self, index: usize) -> Option<&[u8]> {
@@ -66,26 +92,51 @@ impl Buffer {
     }
 
     pub fn line_count(&self) -> usize {
-        self.line_starts.len() - 1
+        self.line_starts.len().saturating_sub(1)
+    }
+
+    fn append_bytes(&mut self, bytes: &[u8]) {
+        // Remove sentinel if has
+        if let Some(c) = self.data.last() && *c != b'\n' {
+            self.line_starts.pop();
+        }
+
+        let old_len = self.data.len();
+        self.data.extend_from_slice(bytes);
+        scan_line_starts(&mut self.line_starts, &self.data, old_len);
     }
 }
 
-fn scan_line_starts(data: &[u8]) -> Vec<usize> {
-    let mut line_starts = vec![0];
+fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize){
+    if out.is_empty() { out.push(from_nbyte) }
 
-    line_starts.extend(
+    out.extend(
         data.iter()
             .enumerate()
+            .skip(from_nbyte)
             .filter_map(|(idx, c)| (*c == b'\n').then_some(idx + 1)),
     );
 
+    // Add sentinel for the last line
     if let Some(c) = data.last()
         && *c != b'\n'
     {
-        line_starts.push(data.len());
+        out.push(data.len());
+    }
+}
+
+fn send_from_stdin(tx: Sender<(usize, [u8;BYTES_PER_READ])>) -> Result<()>{
+    let mut stdin = io::stdin().lock();
+
+    loop {
+        let mut buf = [0u8; BYTES_PER_READ];
+        let n = stdin.read(&mut buf)?;
+
+        if n == 0 { break; }
+        tx.send((n, buf))?;
     }
 
-    line_starts
+    Ok(())
 }
 
 /// similar to `BufRead::lines()`
@@ -99,7 +150,7 @@ impl<'a> Iterator for LinesIter<'a> {
     type Item = (usize, &'a [u8]);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index > self.last_index {
+        if self.current_index >= self.last_index {
             return None;
         }
 
@@ -109,8 +160,7 @@ impl<'a> Iterator for LinesIter<'a> {
     }
 }
 
-pub struct BufferView<'a> {
-    buffer: &'a Buffer,
+pub struct BufferView {
     width: usize,
     height: usize,
 
@@ -120,26 +170,19 @@ pub struct BufferView<'a> {
     max_line_width: usize, // longest line width in current view
 }
 
-impl<'a> BufferView<'a> {
+impl BufferView {
     pub fn new(
-        buffer: &'a Buffer,
         width: usize,
         height: usize,
-    ) -> BufferView<'a> {
-        let mut view = BufferView {
-            buffer,
+        buffer: &Buffer
+    ) -> BufferView {
+        BufferView {
             width,
             height,
             row_offset: 0,
             col_offset: 0,
-            max_line_width: 0,
-        };
-        view.update_max_line_width(buffer.lines(0, height));
-        view
-    }
-
-    pub fn buffer(&self) -> &Buffer {
-        self.buffer
+            max_line_width: max_line_width(buffer.lines(0, height))
+        }
     }
 
     pub fn width(&self) -> usize {
@@ -154,16 +197,8 @@ impl<'a> BufferView<'a> {
         self.row_offset
     }
 
-    pub fn col_offset(&self) -> usize {
-        self.col_offset
-    }
-
-    pub fn line_count(&self) -> usize {
-        self.buffer.line_count()
-    }
-
-    pub fn visible_lines(&self) -> impl Iterator<Item = (usize, &[u8])> {
-        self.buffer
+    pub fn visible_lines<'a>(&self, buffer: &'a Buffer) -> impl Iterator<Item = (usize, &'a [u8])> {
+        buffer
             .lines(self.row_offset, self.height)
             .map(|(index, line)| {
                 let line = if self.col_offset < line.len() {
@@ -176,17 +211,17 @@ impl<'a> BufferView<'a> {
             })
     }
 
-    pub fn set_size(&mut self, width: usize, height: usize) {
+    pub fn set_size(&mut self, width: usize, height: usize, buffer: &Buffer) {
         self.width = width;
         self.height = height;
-        self.set_row_offset(self.row_offset);
+        self.set_row_offset(self.row_offset, buffer);
         self.set_col_offset(self.col_offset);
     }
 
-    pub fn set_row_offset(&mut self, offset: usize) {
-        let offset = self.clamp_row_offset(offset);
+    pub fn set_row_offset(&mut self, offset: usize, buffer: &Buffer) {
+        let offset = self.clamp_row_offset(offset, buffer);
         if offset != self.row_offset {
-            self.update_max_line_width(self.buffer.lines(offset, self.height));
+            self.max_line_width = max_line_width(buffer.lines(offset, self.height));
         }
         self.row_offset = offset;
     }
@@ -195,12 +230,12 @@ impl<'a> BufferView<'a> {
         self.col_offset = self.clamp_col_offset(offset);
     }
 
-    pub fn scroll_down(&mut self, lines: usize) {
-        self.set_row_offset(self.row_offset + lines);
+    pub fn scroll_down(&mut self, lines: usize, buffer: &Buffer) {
+        self.set_row_offset(self.row_offset + lines, buffer);
     }
 
-    pub fn scroll_up(&mut self, lines: usize) {
-        self.set_row_offset(self.row_offset.saturating_sub(lines));
+    pub fn scroll_up(&mut self, lines: usize, buffer: &Buffer) {
+        self.set_row_offset(self.row_offset.saturating_sub(lines), buffer);
     }
 
     pub fn scroll_right(&mut self, cols: usize) {
@@ -211,16 +246,16 @@ impl<'a> BufferView<'a> {
         self.set_col_offset(self.col_offset.saturating_sub(cols));
     }
 
-    pub fn scroll_to_row_end(&mut self) {
-        self.row_offset = self.line_count().saturating_sub(self.height);
+    pub fn scroll_to_row_end(&mut self, buffer: &Buffer) {
+        self.row_offset = buffer.line_count().saturating_sub(self.height);
     }
 
     pub fn scroll_to_col_end(&mut self) {
         self.col_offset = self.max_line_width.saturating_sub(self.width);
     }
 
-    fn clamp_row_offset(&self, offset: usize) -> usize {
-        let max_offset = self.line_count().saturating_sub(self.height);
+    fn clamp_row_offset(&self, offset: usize, buffer: &Buffer) -> usize {
+        let max_offset = buffer.line_count().saturating_sub(self.height);
         cmp::min(offset, max_offset)
     }
 
@@ -229,8 +264,10 @@ impl<'a> BufferView<'a> {
         cmp::min(offset, max_offset)
     }
 
-    fn update_max_line_width(&mut self, lines: LinesIter<'a>) {
-        self.max_line_width =
-            lines.map(|(_, line)| line.len()).max().unwrap_or(0)
-    }
+
 }
+
+fn max_line_width(lines: LinesIter<'_>) -> usize{
+    lines.map(|(_, line)| line.len()).max().unwrap_or(0)
+}
+

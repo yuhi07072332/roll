@@ -1,4 +1,5 @@
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{
         self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
@@ -39,7 +40,12 @@ fn set_panic_hook() {
 
 fn initialize_terminal() -> io::Result<()> {
     terminal::enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All),)?;
+    execute!(
+        io::stdout(),
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        Clear(ClearType::All),
+    )?;
 
     set_panic_hook();
     Ok(())
@@ -47,7 +53,7 @@ fn initialize_terminal() -> io::Result<()> {
 
 fn restore_terminal() -> io::Result<()> {
     terminal::disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
     Ok(())
 }
