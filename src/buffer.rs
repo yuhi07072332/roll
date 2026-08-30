@@ -1,9 +1,9 @@
 use std::{
     cmp,
-    sync::mpsc::{self, Sender, Receiver, TryRecvError},
     fs::{self},
     io::{self, Read},
     path::Path,
+    sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread,
 };
 
@@ -16,33 +16,33 @@ pub struct Buffer {
     data: Vec<u8>,
     line_starts: Vec<usize>,
 
-    stdin_receiver: Option<Receiver<(usize, [u8;BYTES_PER_READ])>>
+    stdin_receiver: Option<Receiver<(usize, [u8; BYTES_PER_READ])>>,
 }
 
 impl Buffer {
     pub fn from_file(path: &Path) -> io::Result<Buffer> {
         let data = fs::read(path)?;
-        let mut line_starts: Vec<usize> = Vec::new(); 
+        let mut line_starts: Vec<usize> = Vec::new();
         scan_line_starts(&mut line_starts, &data, 0);
 
         Ok(Buffer {
             data,
             line_starts,
-            stdin_receiver: None
+            stdin_receiver: None,
         })
     }
 
     pub fn from_stdin() -> io::Result<Buffer> {
         let (tx, rx) = mpsc::channel();
 
-        thread::spawn(move || { 
+        thread::spawn(move || {
             let _ = send_from_stdin(tx);
         });
 
         Ok(Buffer {
             data: Vec::new(),
             line_starts: Vec::new(),
-            stdin_receiver: Some(rx)
+            stdin_receiver: Some(rx),
         })
     }
 
@@ -57,7 +57,6 @@ impl Buffer {
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.stdin_receiver = None;
-                    break;
                 }
             }
         }
@@ -97,7 +96,9 @@ impl Buffer {
 
     fn append_bytes(&mut self, bytes: &[u8]) {
         // Remove sentinel if has
-        if let Some(c) = self.data.last() && *c != b'\n' {
+        if let Some(c) = self.data.last()
+            && *c != b'\n'
+        {
             self.line_starts.pop();
         }
 
@@ -107,8 +108,10 @@ impl Buffer {
     }
 }
 
-fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize){
-    if out.is_empty() { out.push(from_nbyte) }
+fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize) {
+    if out.is_empty() {
+        out.push(from_nbyte)
+    }
 
     out.extend(
         data.iter()
@@ -125,14 +128,16 @@ fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize){
     }
 }
 
-fn send_from_stdin(tx: Sender<(usize, [u8;BYTES_PER_READ])>) -> Result<()>{
+fn send_from_stdin(tx: Sender<(usize, [u8; BYTES_PER_READ])>) -> Result<()> {
     let mut stdin = io::stdin().lock();
 
     loop {
         let mut buf = [0u8; BYTES_PER_READ];
         let n = stdin.read(&mut buf)?;
 
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         tx.send((n, buf))?;
     }
 
@@ -171,17 +176,13 @@ pub struct BufferView {
 }
 
 impl BufferView {
-    pub fn new(
-        width: usize,
-        height: usize,
-        buffer: &Buffer
-    ) -> BufferView {
+    pub fn new(width: usize, height: usize, buffer: &Buffer) -> BufferView {
         BufferView {
             width,
             height,
             row_offset: 0,
             col_offset: 0,
-            max_line_width: max_line_width(buffer.lines(0, height))
+            max_line_width: max_line_width(buffer.lines(0, height)),
         }
     }
 
@@ -197,7 +198,10 @@ impl BufferView {
         self.row_offset
     }
 
-    pub fn visible_lines<'a>(&self, buffer: &'a Buffer) -> impl Iterator<Item = (usize, &'a [u8])> {
+    pub fn visible_lines<'a>(
+        &self,
+        buffer: &'a Buffer,
+    ) -> impl Iterator<Item = (usize, &'a [u8])> {
         buffer
             .lines(self.row_offset, self.height)
             .map(|(index, line)| {
@@ -221,7 +225,8 @@ impl BufferView {
     pub fn set_row_offset(&mut self, offset: usize, buffer: &Buffer) {
         let offset = self.clamp_row_offset(offset, buffer);
         if offset != self.row_offset {
-            self.max_line_width = max_line_width(buffer.lines(offset, self.height));
+            self.max_line_width =
+                max_line_width(buffer.lines(offset, self.height));
         }
         self.row_offset = offset;
     }
@@ -263,11 +268,8 @@ impl BufferView {
         let max_offset = self.max_line_width.saturating_sub(self.width);
         cmp::min(offset, max_offset)
     }
-
-
 }
 
-fn max_line_width(lines: LinesIter<'_>) -> usize{
+fn max_line_width(lines: LinesIter<'_>) -> usize {
     lines.map(|(_, line)| line.len()).max().unwrap_or(0)
 }
-

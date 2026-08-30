@@ -58,7 +58,7 @@ pub fn run() -> Result<()> {
 
     let render_config = render::RenderConfig {
         line_numbers: args.line_numbers,
-        source_name
+        source_name,
     };
 
     run_loop(buffer, render_config)?;
@@ -84,9 +84,13 @@ fn run_loop(mut buffer: Buffer, render_config: RenderConfig) -> io::Result<()> {
         renderer.draw_frame(&buffer, &view, screen_size)?;
 
         if event::poll(FRAME_TIMEOUT)? {
-            handle_event(event::read()?, &buffer,  &mut view, &mut terminal, || {
-                needs_exit = true
-            })
+            handle_event(
+                event::read()?,
+                &buffer,
+                &mut view,
+                &mut terminal,
+                || needs_exit = true,
+            )
         }
     }
 

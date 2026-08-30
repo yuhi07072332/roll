@@ -1,6 +1,7 @@
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
+    style::ResetColor,
     terminal::{
         self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
     },
@@ -53,7 +54,12 @@ fn initialize_terminal() -> io::Result<()> {
 
 fn restore_terminal() -> io::Result<()> {
     terminal::disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        ResetColor
+    )?;
 
     Ok(())
 }

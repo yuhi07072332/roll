@@ -18,7 +18,7 @@ pub struct ScreenSize(pub u16, pub u16);
 
 pub struct RenderConfig {
     pub line_numbers: bool,
-    pub source_name: String
+    pub source_name: String,
 }
 
 struct FrameBuf(Vec<u8>);
@@ -28,7 +28,9 @@ impl FrameBuf {
         FrameBuf(Vec::with_capacity(FRAME_BUFFER_INIT_CAPACITY))
     }
 
-    fn get_mut(&mut self) -> &mut Vec<u8> { &mut self.0 }
+    fn get_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.0
+    }
 
     fn queue(&mut self, buf: &[u8]) -> io::Result<&mut Self> {
         self.0.write_all(buf)?;
@@ -57,11 +59,16 @@ impl Renderer {
         Self {
             stdout: io::stdout(),
             config,
-            frame_buf: FrameBuf::new()
+            frame_buf: FrameBuf::new(),
         }
     }
 
-    pub fn resize_view(&self, view: &mut BufferView, screen_size: ScreenSize, buffer: &Buffer) {
+    pub fn resize_view(
+        &self,
+        view: &mut BufferView,
+        screen_size: ScreenSize,
+        buffer: &Buffer,
+    ) {
         let ScreenSize(width, height) = screen_size;
         let width = if self.config.line_numbers {
             (width as usize).saturating_sub(Self::line_number_width(buffer) + 1)
@@ -76,13 +83,13 @@ impl Renderer {
         &mut self,
         buffer: &Buffer,
         view: &BufferView,
-        size: ScreenSize
+        size: ScreenSize,
     ) -> io::Result<()> {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
         self.draw_view(buffer, view)?;
-        self.draw_status_line(view,buffer.line_count(), size)?;
+        self.draw_status_line(view, buffer.line_count(), size)?;
         self.frame_buf.flush(&mut self.stdout)
     }
 
@@ -94,7 +101,11 @@ impl Renderer {
         (buffer.line_count().checked_ilog10().unwrap_or(0) + 1) as usize
     }
 
-    fn draw_view(&mut self, buffer: &Buffer, view: &BufferView) -> io::Result<()> {
+    fn draw_view(
+        &mut self,
+        buffer: &Buffer,
+        view: &BufferView,
+    ) -> io::Result<()> {
         self.frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
         for (row_number, row) in view.visible_lines(buffer) {
             if self.config.line_numbers {
@@ -132,11 +143,7 @@ impl Renderer {
         self.frame_buf
             .queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))?
             .queue_cmd(style::SetAttribute(Attribute::Reverse))?
-            .queue_cmd(Print(format!(
-                "{: <1$}",
-                "",
-                width as usize
-            )))?;
+            .queue_cmd(Print(format!("{: <1$}", "", width as usize)))?;
 
         self.frame_buf
             .queue_cmd(cursor::MoveToColumn(0))?
