@@ -3,7 +3,7 @@ mod render;
 mod terminal;
 
 use std::{
-    io::{self, Read},
+    io::{self, Read, Write},
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -23,7 +23,7 @@ use crossterm::{
 
 use buffer::{BYTES_PER_READ, Buffer, BufferView};
 use crossterm::tty::IsTty;
-use render::{RenderConfig, SourceName, Renderer, ScreenSize};
+use render::{RenderConfig, Renderer, ScreenSize, SourceName};
 use terminal::Terminal;
 
 #[derive(Parser, Debug)]
@@ -46,7 +46,7 @@ enum Event {
         n: usize,
         bytes: Box<[u8; BYTES_PER_READ]>,
     },
-    BufferEof
+    BufferEof,
 }
 
 pub fn print_error(message: impl std::fmt::Display) {
@@ -60,11 +60,11 @@ pub fn run() -> Result<()> {
 
     let source_name;
 
-    let buffer = if let Some(file_path) = args.file_path {
-        source_name = SourceName::FileName(
-            String::from(file_path.to_str().unwrap_or("(unknown)"))
-        );
-        Buffer::from_file(&file_path)?
+    let buffer = if let Some(file_path) = &args.file_path {
+        source_name = SourceName::FileName(String::from(
+            file_path.to_str().unwrap_or("(unknown)"),
+        ));
+        Buffer::from_file(file_path)?
     } else {
         if io::stdin().is_tty() {
             bail!("missing file or piped stdin");
@@ -82,25 +82,28 @@ pub fn run() -> Result<()> {
         source_name,
     };
 
-    run_loop(buffer, render_config, rx)?;
+    run_loop(&args, buffer, render_config, rx)?;
 
     Ok(())
 }
 
 fn run_loop(
+    args: &Args,
     mut buffer: Buffer,
     render_config: RenderConfig,
     receiver: Receiver<Event>,
 ) -> Result<()> {
     let mut terminal = Terminal::init()?;
-    let mut view = BufferView::new(
-        terminal.width as usize,
-        terminal.height as usize,
+    let mut view = BufferView::new();
+    let mut renderer = Renderer::new(render_config);
+
+    renderer.resize_view(
+        &mut view,
+        ScreenSize(terminal.width, terminal.height),
         &buffer,
     );
-    let mut renderer = Renderer::new(render_config);
-    let mut needs_exit: bool = false;
 
+    let mut needs_exit: bool = false;
     while !needs_exit {
         match receiver.recv()? {
             Event::BufferRead { n, bytes } => {
@@ -117,6 +120,18 @@ fn run_loop(
             }
             Event::BufferEof => {
                 buffer.on_buffer_eof();
+
+                if args.quit_if_one_screen
+                    && buffer.line_count() < view.height()
+                {
+                    drop(terminal);
+                    let mut stdout = io::stdout().lock();
+                    for (_, line) in buffer.lines(0, buffer.line_count()) {
+                        stdout.write_all(line)?;
+                        stdout.write_all(b"\r\n")?;
+                    }
+                    return Ok(());
+                }
             }
         }
 

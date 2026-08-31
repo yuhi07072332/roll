@@ -18,7 +18,7 @@ pub struct ScreenSize(pub u16, pub u16);
 
 pub enum SourceName {
     FileName(String),
-    Stdin
+    Stdin,
 }
 
 pub struct RenderConfig {
@@ -139,7 +139,8 @@ impl Renderer {
         size: ScreenSize,
     ) -> io::Result<()> {
         let ScreenSize(width, height) = size;
-        let row_index = view.row_offset();
+        let row_index =
+            cmp::min(view.row_offset() + view.height(), buffer.line_count());
         let percentage = row_index
             .checked_mul(100)
             .and_then(|n| n.checked_div(buffer.line_count()))
@@ -147,7 +148,7 @@ impl Renderer {
         let source_name = match &self.config.source_name {
             SourceName::FileName(filename) => filename,
             SourceName::Stdin if buffer.is_reading() => "(stdin: reading)",
-            SourceName::Stdin => "(stdin)"
+            SourceName::Stdin => "(stdin)",
         };
 
         self.frame_buf
@@ -161,7 +162,7 @@ impl Renderer {
             .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
             .queue_cmd(Print(format!(
                 "({:>3}/{:>3}) {:>3}%",
-                row_index + 1,
+                row_index,
                 buffer.line_count(),
                 percentage
             )))?

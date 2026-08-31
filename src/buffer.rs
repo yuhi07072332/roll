@@ -20,18 +20,24 @@ impl Buffer {
         let mut line_starts: Vec<usize> = Vec::new();
         scan_line_starts(&mut line_starts, &data, 0);
 
-        Ok(Buffer { data, line_starts, is_reading: false})
+        Ok(Buffer {
+            data,
+            line_starts,
+            is_reading: false,
+        })
     }
 
     pub fn from_stdin() -> io::Result<Buffer> {
         Ok(Buffer {
             data: Vec::new(),
             line_starts: Vec::new(),
-            is_reading: true
+            is_reading: true,
         })
     }
 
-    pub fn is_reading(&self) -> bool { self.is_reading }
+    pub fn is_reading(&self) -> bool {
+        self.is_reading
+    }
 
     pub fn line_at(&self, index: usize) -> Option<&[u8]> {
         let begin_idx = *self.line_starts.get(index)?;
@@ -64,7 +70,6 @@ impl Buffer {
     pub fn on_buffer_eof(&mut self) {
         self.is_reading = false
     }
-
 
     pub fn lines<'a>(&'a self, from: usize, take: usize) -> LinesIter<'a> {
         LinesIter {
@@ -144,13 +149,13 @@ pub struct BufferView {
 }
 
 impl BufferView {
-    pub fn new(width: usize, height: usize, buffer: &Buffer) -> BufferView {
+    pub fn new() -> BufferView {
         BufferView {
-            width,
-            height,
+            width: 0,
+            height: 0,
             row_offset: 0,
             col_offset: 0,
-            max_line_width: max_line_width(buffer.lines(0, height)),
+            max_line_width: 0,
         }
     }
 
