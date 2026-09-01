@@ -59,11 +59,7 @@ impl Buffer {
         Some(line)
     }
 
-    pub fn on_buffer_read(
-        &mut self,
-        n: usize,
-        bytes: Box<[u8; BYTES_PER_READ]>,
-    ) {
+    pub fn on_buffer_read(&mut self, n: usize, bytes: Box<[u8]>) {
         self.append_bytes(&bytes.as_ref()[..n]);
     }
 

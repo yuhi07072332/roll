@@ -5,29 +5,33 @@ use crossterm::{
     terminal::{
         self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
     },
+    cursor
 };
 use std::{io, panic};
 
+#[derive(Clone, Copy)]
+pub struct ScreenSize(pub u16, pub u16);
+
 #[derive(Debug)]
-pub struct Terminal {
-    pub width: u16,
-    pub height: u16,
-}
+pub struct TerminalGuard {}
 
-impl Terminal {
-    pub fn init() -> io::Result<Terminal> {
-        let (width, height) = terminal::size()?;
-
+impl TerminalGuard {
+    pub fn init() -> io::Result<TerminalGuard> {
         initialize_terminal()?;
 
-        Ok(Terminal { width, height })
+        Ok(TerminalGuard {})
     }
 }
 
-impl Drop for Terminal {
+impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = restore_terminal();
     }
+}
+
+pub fn size() -> io::Result<ScreenSize> {
+    let (width, height) = terminal::size()?;
+    Ok(ScreenSize(width, height))
 }
 
 fn set_panic_hook() {
@@ -58,7 +62,8 @@ fn restore_terminal() -> io::Result<()> {
         io::stdout(),
         LeaveAlternateScreen,
         DisableMouseCapture,
-        ResetColor
+        ResetColor,
+        cursor::Show
     )?;
 
     Ok(())

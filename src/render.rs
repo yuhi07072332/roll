@@ -11,10 +11,7 @@ use crossterm::{
 
 const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
 
-use crate::buffer::{Buffer, BufferView};
-
-#[derive(Clone, Copy)]
-pub struct ScreenSize(pub u16, pub u16);
+use crate::{InputBox, Mode, ScreenSize, buffer::{Buffer, BufferView}};
 
 pub enum SourceName {
     FileName(String),
@@ -88,13 +85,20 @@ impl Renderer {
         &mut self,
         buffer: &Buffer,
         view: &BufferView,
+        mode: &Mode,
         size: ScreenSize,
     ) -> io::Result<()> {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
         self.draw_view(buffer, view)?;
-        self.draw_status_line(view, buffer, size)?;
+        
+        match mode {
+            Mode::Normal => self.draw_status_line(view, buffer, size)?,
+            Mode::Input(input_box) => self.draw_input_box(input_box, size)?
+        }
+
+        self.frame_buf.queue_cmd(cursor::Hide)?;
         self.frame_buf.flush(&mut self.stdout)
     }
 
@@ -170,4 +174,11 @@ impl Renderer {
 
         Ok(())
     }
+
+    fn draw_input_box(&self, input_box: &InputBox, size: ScreenSize) -> io::Result<()> {
+        let ScreenSize(width, height) = size
+        self.frame_buf
+            .queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))
+    }
+
 }
