@@ -11,7 +11,10 @@ use crossterm::{
 
 const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
 
-use crate::{InputBox, Mode, ScreenSize, buffer::{Buffer, BufferView}};
+use crate::{
+    InputBox, Mode, ScreenSize,
+    buffer::{Buffer, BufferView},
+};
 
 pub enum SourceName {
     FileName(String),
@@ -54,6 +57,7 @@ pub struct Renderer {
     config: RenderConfig,
 
     frame_buf: FrameBuf,
+    is_cursor_visible: bool,
 }
 
 impl Renderer {
@@ -62,6 +66,7 @@ impl Renderer {
             stdout: io::stdout(),
             config,
             frame_buf: FrameBuf::new(),
+            is_cursor_visible: false,
         }
     }
 
@@ -71,9 +76,9 @@ impl Renderer {
         screen_size: ScreenSize,
         buffer: &Buffer,
     ) {
-        let ScreenSize(width, height) = screen_size;
+        let ScreenSize { width, height } = screen_size;
         let width = if self.config.line_numbers {
-            (width as usize).saturating_sub(Self::line_number_width(buffer) + 1)
+            (width as usize).saturating_sub(line_number_width(buffer) + 1)
         } else {
             width as usize
         };
@@ -91,14 +96,44 @@ impl Renderer {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
-        self.draw_view(buffer, view)?;
-        
+        draw_view(&mut self.frame_buf, buffer, view, self.config.line_numbers)?;
+
         match mode {
-            Mode::Normal => self.draw_status_line(view, buffer, size)?,
-            Mode::Input(input_box) => self.draw_input_box(input_box, size)?
+            Mode::Normal => {
+                let source_name = match &self.config.source_name {
+                    SourceName::FileName(filename) => filename,
+                    SourceName::Stdin if buffer.is_reading() => {
+                        "(stdin: reading)"
+                    }
+                    SourceName::Stdin => "(stdin)",
+                };
+                draw_status_line(
+                    &mut self.frame_buf,
+                    source_name,
+                    view,
+                    buffer,
+                    size,
+                )?;
+                self.hide_cursor()?
+            }
+            Mode::Input(input_box) => {
+                draw_input_box(&mut self.frame_buf, input_box, size)?;
+                self.show_cursor()?
+            }
+            Mode::Search(state) => {
+                todo!()
+                /*
+                let message: String = if state.is_done {
+                    format!("match: ({}/{})", state.current_match_idx + 1, state.match_lines.len())
+                } else {
+                    String::from("match: ")
+                };
+                draw_status_line(&mut self.frame_buf, &message, view, buffer, size)?;
+                self.hide_cursor()?
+                */
+            }
         }
 
-        self.frame_buf.queue_cmd(cursor::Hide)?;
         self.frame_buf.flush(&mut self.stdout)
     }
 
@@ -106,79 +141,98 @@ impl Renderer {
         self.frame_buf.queue_cmd(Clear(ClearType::All)).map(|_| ())
     }
 
-    fn line_number_width(buffer: &Buffer) -> usize {
-        (buffer.line_count().checked_ilog10().unwrap_or(0) + 1) as usize
+    fn show_cursor(&mut self) -> io::Result<()> {
+        if !self.is_cursor_visible {
+            self.frame_buf.queue_cmd(cursor::Show)?;
+        }
+        Ok(())
     }
 
-    fn draw_view(
-        &mut self,
-        buffer: &Buffer,
-        view: &BufferView,
-    ) -> io::Result<()> {
-        self.frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
-        for (row_number, row) in view.visible_lines(buffer) {
-            if self.config.line_numbers {
-                self.frame_buf.queue_cmd(PrintStyledContent(
-                    format!(
-                        "{:>width$} ",
-                        row_number + 1,
-                        width = Self::line_number_width(buffer),
-                    )
-                    .dim(),
-                ))?;
-            }
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        if self.is_cursor_visible {
+            self.frame_buf.queue_cmd(cursor::Hide)?;
+        }
+        Ok(())
+    }
+}
 
-            self.frame_buf
-                .queue(&row[..cmp::min(view.width(), row.len())])?
-                .queue_cmd(cursor::MoveToNextLine(1))?;
+fn line_number_width(buffer: &Buffer) -> usize {
+    (buffer.line_count().checked_ilog10().unwrap_or(0) + 1) as usize
+}
+
+fn draw_view(
+    frame_buf: &mut FrameBuf,
+    buffer: &Buffer,
+    view: &BufferView,
+    show_line_numbers: bool,
+) -> io::Result<()> {
+    frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
+    for (row_number, row) in view.visible_lines(buffer) {
+        if show_line_numbers {
+            frame_buf.queue_cmd(PrintStyledContent(
+                format!(
+                    "{:>width$} ",
+                    row_number + 1,
+                    width = line_number_width(buffer),
+                )
+                .dim(),
+            ))?;
         }
 
-        Ok(())
+        frame_buf
+            .queue(&row[..cmp::min(view.width(), row.len())])?
+            .queue_cmd(cursor::MoveToNextLine(1))?;
     }
 
-    fn draw_status_line(
-        &mut self,
-        view: &BufferView,
-        buffer: &Buffer,
-        size: ScreenSize,
-    ) -> io::Result<()> {
-        let ScreenSize(width, height) = size;
-        let row_index =
-            cmp::min(view.row_offset() + view.height(), buffer.line_count());
-        let percentage = row_index
-            .checked_mul(100)
-            .and_then(|n| n.checked_div(buffer.line_count()))
-            .unwrap_or(0);
-        let source_name = match &self.config.source_name {
-            SourceName::FileName(filename) => filename,
-            SourceName::Stdin if buffer.is_reading() => "(stdin: reading)",
-            SourceName::Stdin => "(stdin)",
-        };
+    Ok(())
+}
 
-        self.frame_buf
-            .queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))?
-            .queue_cmd(style::SetAttribute(Attribute::Reverse))?
-            .queue_cmd(Print(format!("{: <1$}", "", width as usize)))?;
+fn draw_input_box(
+    frame_buf: &mut FrameBuf,
+    input_box: &InputBox,
+    size: ScreenSize,
+) -> io::Result<()> {
+    let prefix = input_box.prefix.as_deref().unwrap_or("");
 
-        self.frame_buf
-            .queue_cmd(cursor::MoveToColumn(0))?
-            .queue_cmd(Print(source_name))?
-            .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
-            .queue_cmd(Print(format!(
-                "({:>3}/{:>3}) {:>3}%",
-                row_index,
-                buffer.line_count(),
-                percentage
-            )))?
-            .queue_cmd(style::SetAttribute(Attribute::Reset))?;
+    frame_buf
+        .queue_cmd(cursor::MoveTo(0, size.height.saturating_sub(1)))?
+        .queue_cmd(PrintStyledContent(prefix.cyan()))?
+        .queue(input_box.input.as_bytes())?;
 
-        Ok(())
-    }
+    Ok(())
+}
 
-    fn draw_input_box(&self, input_box: &InputBox, size: ScreenSize) -> io::Result<()> {
-        let ScreenSize(width, height) = size
-        self.frame_buf
-            .queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))
-    }
+fn draw_status_line(
+    frame_buf: &mut FrameBuf,
+    message: &str,
+    view: &BufferView,
+    buffer: &Buffer,
+    size: ScreenSize,
+) -> io::Result<()> {
+    let ScreenSize { width, height } = size;
+    let row_index =
+        cmp::min(view.row_offset() + view.height(), buffer.line_count());
+    let percentage = row_index
+        .checked_mul(100)
+        .and_then(|n| n.checked_div(buffer.line_count()))
+        .unwrap_or(0);
 
+    frame_buf
+        .queue_cmd(cursor::MoveTo(0, height.saturating_sub(1)))?
+        .queue_cmd(style::SetAttribute(Attribute::Reverse))?
+        .queue_cmd(Print(format!("{: <1$}", "", width as usize)))?;
+
+    frame_buf
+        .queue_cmd(cursor::MoveToColumn(0))?
+        .queue_cmd(Print(message))?
+        .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
+        .queue_cmd(Print(format!(
+            "({:>3}/{:>3}) {:>3}%",
+            row_index,
+            buffer.line_count(),
+            percentage
+        )))?
+        .queue_cmd(style::SetAttribute(Attribute::Reset))?;
+
+    Ok(())
 }

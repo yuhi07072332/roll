@@ -1,12 +1,16 @@
 mod buffer;
 mod render;
+mod search;
 mod terminal;
 
 use std::{
-    io::{self, Read, Write}, ops::Deref, path::PathBuf, sync::mpsc::{self, Receiver, Sender}, thread
+    io::{self, Read, Write},
+    path::PathBuf,
+    sync::mpsc::{self, Receiver, Sender},
+    thread,
 };
 
-use anyhow::{Result, bail};
+use anyhow::bail;
 
 use clap::Parser;
 
@@ -18,9 +22,10 @@ use crossterm::{
     style::{Color, Stylize},
 };
 
-use buffer::{BYTES_PER_READ, Buffer, BufferView};
+use buffer::{BYTES_PER_READ, Buffer, BufferView, LinesIter};
 use crossterm::tty::IsTty;
 use render::{RenderConfig, Renderer, SourceName};
+use search::{SearchDirection, SearchMatch, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
 
 #[derive(Parser, Debug)]
@@ -42,27 +47,44 @@ enum Event {
     BufferRead { n: usize, bytes: Box<[u8]> },
     BufferEof,
 }
+
 enum Mode {
     Normal,
-    Input(InputBox)
+    Input(InputBox),
+    Search(SearchState),
+}
+
+enum InputAction {
+    Search(SearchDirection),
+}
+
+enum InputResult {
+    Continue(InputBox),
+    Cancel,
+    Submit { input: String, action: InputAction },
 }
 
 struct InputBox {
     input: String,
-    on_enter: Box<dyn FnOnce(&str)>
+    prefix: Option<String>,
+    action: InputAction,
 }
 
 impl InputBox {
-    fn new(on_enter: Box<dyn FnOnce(&str)>) -> InputBox {
+    fn new(action: InputAction) -> InputBox {
         InputBox {
             input: String::new(),
-            on_enter
+            prefix: None,
+            action,
         }
     }
 
-    fn on_enter(self) {
-        let callback = self.on_enter;
-        callback(&self.input)
+    fn prefix(self, prefix: String) -> Self {
+        InputBox {
+            input: self.input,
+            prefix: Some(prefix),
+            action: self.action,
+        }
     }
 }
 
@@ -70,7 +92,16 @@ pub fn print_error(message: impl std::fmt::Display) {
     eprintln!("{} {message}", "error:".with(Color::Red).bold());
 }
 
-pub fn run() -> Result<()> {
+fn print_buffer(buffer: &Buffer) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    for (_, line) in buffer.lines(0, buffer.line_count()) {
+        stdout.write_all(line)?;
+        stdout.write_all(b"\r\n")?;
+    }
+    Ok(())
+}
+
+pub fn run() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let (tx, rx) = mpsc::channel::<Event>();
@@ -109,7 +140,7 @@ fn run_loop(
     mut buffer: Buffer,
     render_config: RenderConfig,
     receiver: Receiver<Event>,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let terminal = TerminalGuard::init()?;
     let mut view = BufferView::new();
     let mut renderer = Renderer::new(render_config);
@@ -126,17 +157,13 @@ fn run_loop(
                 buffer.on_buffer_read(n, bytes);
             }
             Event::Terminal(TermEvent::Resize(width, height)) => {
-                screen_size = ScreenSize(width, height);
+                screen_size = ScreenSize { width, height };
             }
             Event::Terminal(e @ TermEvent::Key(_))
             | Event::Terminal(e @ TermEvent::Mouse(_)) => {
-                mode = handle_terminal_input(
-                    e,
-                    mode,
-                    &mut buffer,
-                    &mut view,
-                    || needs_exit = true,
-                );
+                mode = handle_input(e, mode, &buffer, &mut view, || {
+                    needs_exit = true
+                })?;
             }
             Event::BufferEof => {
                 buffer.on_buffer_eof();
@@ -156,7 +183,7 @@ fn run_loop(
     Ok(())
 }
 
-fn send_from_stdin(tx: Sender<Event>) -> Result<()> {
+fn send_from_stdin(tx: Sender<Event>) -> anyhow::Result<()> {
     let mut stdin = io::stdin().lock();
 
     loop {
@@ -176,41 +203,78 @@ fn send_from_stdin(tx: Sender<Event>) -> Result<()> {
     Ok(())
 }
 
-fn send_from_terminal_event(tx: Sender<Event>) -> Result<()> {
+fn send_from_terminal_event(tx: Sender<Event>) -> anyhow::Result<()> {
     loop {
         tx.send(Event::Terminal(event::read()?))?;
     }
 }
 
-fn handle_terminal_input(
+fn handle_input(
     event: TermEvent,
     mode: Mode,
-    buffer: &mut Buffer,
+    buffer: &Buffer,
     view: &mut BufferView,
     on_exit: impl FnOnce(),
-) -> Mode {
+) -> anyhow::Result<Mode> {
     match mode {
-        Mode::Normal => handle_terminal_normal_input(event, buffer, view, on_exit),
-        Mode::Input(input_box) => handle_terminal_inputbox(event, input_box),
+        Mode::Normal => {
+            Ok(handle_normal_input(mode, &event, buffer, view, on_exit))
+        }
+        Mode::Input(input_box) => {
+            match handle_inputbox_input(event, input_box) {
+                InputResult::Continue(input_box) => Ok(Mode::Input(input_box)),
+                InputResult::Cancel => Ok(Mode::Normal),
+                InputResult::Submit { input, action } => {
+                    let result = on_input_submit(input, action, buffer, view)?;
+                    Ok(result)
+                }
+            }
+        }
+        Mode::Search(_) => {
+            let mode = handle_normal_input(mode, &event, buffer, view, on_exit);
+            if let Mode::Search(search_state) = mode {
+                Ok(handle_search_input(event, search_state, buffer, view))
+            } else {
+                Ok(mode)
+            }
+        }
     }
 }
 
-fn handle_terminal_normal_input(
-    event: TermEvent,
-    buffer: &mut Buffer,
+fn on_input_submit(
+    input: String,
+    action: InputAction,
+    buffer: &Buffer,
+    view: &mut BufferView,
+) -> anyhow::Result<Mode> {
+    match action {
+        InputAction::Search(direction) => {
+            let mut state = SearchState::new(input, direction);
+            state.search_from(view.row_offset(), buffer);
+            Ok(Mode::Search(state))
+        }
+        _ => Ok(Mode::Normal),
+    }
+}
+
+fn handle_normal_input(
+    mode: Mode,
+    event: &TermEvent,
+    buffer: &Buffer,
     view: &mut BufferView,
     on_exit: impl FnOnce(),
 ) -> Mode {
     let half_page = view.height() / 2;
 
-    match event {
+    match *event {
+        // characters
         TermEvent::Key(KeyEvent {
             code, modifiers, ..
         }) if modifiers == KeyModifiers::NONE
             || modifiers == KeyModifiers::SHIFT =>
         {
             match code {
-                KeyCode::Char('q') | KeyCode::Esc => on_exit(),
+                KeyCode::Char('q') => on_exit(),
 
                 KeyCode::Char('j') | KeyCode::Down | KeyCode::Enter => {
                     view.scroll_down(1, buffer)
@@ -229,7 +293,12 @@ fn handle_terminal_normal_input(
                 KeyCode::Char('G') => view.scroll_to_row_end(buffer),
 
                 KeyCode::Char('/') => {
-                    return Mode::Input(InputBox::new(Box::new(search_front)))
+                    return Mode::Input(
+                        InputBox::new(InputAction::Search(
+                            SearchDirection::Forward,
+                        ))
+                        .prefix(String::from("/")),
+                    );
                 }
 
                 _ => (),
@@ -256,45 +325,76 @@ fn handle_terminal_normal_input(
         _ => (),
     }
 
-    Mode::Normal
+    mode
 }
 
-fn handle_terminal_inputbox(event: TermEvent, mut input_box: InputBox) -> Mode {
+fn handle_inputbox_input(
+    event: TermEvent,
+    mut input_box: InputBox,
+) -> InputResult {
     let TermEvent::Key(key) = event else {
-        return Mode::Input(input_box);
+        return InputResult::Continue(input_box);
     };
 
-    match key {
-        KeyEvent{code, modifiers, ..} 
-        if modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT => match code {
+    let KeyEvent {
+        code, modifiers, ..
+    } = key;
+
+    match modifiers {
+        KeyModifiers::NONE | KeyModifiers::SHIFT => match code {
             KeyCode::Enter => {
-                input_box.on_enter();
-                return Mode::Normal;
+                return InputResult::Submit {
+                    input: input_box.input,
+                    action: input_box.action,
+                };
             }
-            KeyCode::Esc => {
-                return Mode::Normal;
-            }
+            KeyCode::Esc => return InputResult::Cancel,
             KeyCode::Backspace => {
-                input_box.input.pop();
+                if input_box.input.pop().is_none() {
+                    return InputResult::Cancel;
+                }
             }
             KeyCode::Char(c) if !c.is_control() => {
                 input_box.input.push(c);
             }
-            _ => ()
-        }
-        _ => ()
+            _ => (),
+        },
+        _ => (),
     }
-    
-    Mode::Input(input_box)
+
+    InputResult::Continue(input_box)
 }
 
-fn search_front(pattern: &str) {}
+fn handle_search_input(
+    event: TermEvent,
+    mut state: SearchState,
+    buffer: &Buffer,
+    view: &mut BufferView,
+) -> Mode {
+    let TermEvent::Key(key) = event else {
+        return Mode::Search(state);
+    };
 
-fn print_buffer(buffer: &Buffer) -> io::Result<()> {
-    let mut stdout = io::stdout().lock();
-    for (_, line) in buffer.lines(0, buffer.line_count()) {
-        stdout.write_all(line)?;
-        stdout.write_all(b"\r\n")?;
+    let KeyEvent {
+        code, modifiers, ..
+    } = key;
+
+    match modifiers {
+        KeyModifiers::NONE | KeyModifiers::SHIFT => match code {
+            // TODO:
+            KeyCode::Char('n') => {
+                //state.next_match();
+                // view.set_row_offset(state.current_match().line_index, buffer);
+            }
+            KeyCode::Char('p') => {
+                //state.prev_match();
+                // view.set_row_offset(state.current_match().line_index, buffer);
+            }
+            KeyCode::Esc => return Mode::Normal,
+            _ => (),
+        },
+        _ => (),
     }
-    Ok(())
+
+    Mode::Search(state)
 }

@@ -5,6 +5,8 @@ use std::{
     path::Path,
 };
 
+pub type Line<'a> = (usize, &'a [u8]);
+
 pub const BYTES_PER_READ: usize = 512;
 
 #[derive(Default)]
@@ -75,6 +77,14 @@ impl Buffer {
         }
     }
 
+    pub fn lines_from<'a>(&'a self, from: usize) -> LinesIter<'a> {
+        LinesIter {
+            buf: self,
+            current_index: from,
+            last_index: self.line_count() - 1,
+        }
+    }
+
     pub fn line_count(&self) -> usize {
         self.line_starts.len().saturating_sub(1)
     }
@@ -121,7 +131,7 @@ pub struct LinesIter<'a> {
 }
 
 impl<'a> Iterator for LinesIter<'a> {
-    type Item = (usize, &'a [u8]);
+    type Item = Line<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_index >= self.last_index {
@@ -170,7 +180,7 @@ impl BufferView {
     pub fn visible_lines<'a>(
         &self,
         buffer: &'a Buffer,
-    ) -> impl Iterator<Item = (usize, &'a [u8])> {
+    ) -> impl Iterator<Item = Line<'a>> {
         buffer
             .lines(self.row_offset, self.height)
             .map(|(index, line)| {
