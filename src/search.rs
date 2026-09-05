@@ -1,5 +1,4 @@
 use std::{
-    char::MAX,
     cmp,
     collections::BTreeMap,
     ops::{Bound, Range},

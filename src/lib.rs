@@ -1,5 +1,5 @@
 mod buffer;
-mod render;
+mod output;
 mod search;
 mod terminal;
 
@@ -24,7 +24,7 @@ use crossterm::{
 
 use buffer::{BYTES_PER_READ, Buffer, BufferView};
 use crossterm::tty::IsTty;
-use render::{RenderConfig, Renderer, SourceName};
+use output::{RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
 
@@ -125,7 +125,7 @@ pub fn run() -> anyhow::Result<()> {
 
     thread::spawn(move || send_from_terminal_event(tx));
 
-    let render_config = render::RenderConfig {
+    let render_config = output::RenderConfig {
         line_numbers: args.line_numbers,
         source_name,
     };
@@ -251,6 +251,9 @@ fn on_input_submit(
         InputAction::Search(direction) => {
             let mut state = SearchState::new(input, direction)?;
             state.search_from(view.line_offset(), buffer)?;
+            if let Some((n, _)) = state.next_match_from(view.line_offset(), buffer) {
+                view.set_line_offset(*n, buffer);
+            }
             Ok(Mode::Search(state))
         }
     }
