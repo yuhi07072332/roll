@@ -2,6 +2,7 @@ use std::{
     cmp,
     fs::{self},
     io,
+    ops::Range,
     path::Path,
 };
 
@@ -73,15 +74,24 @@ impl Buffer {
         LinesIter {
             buf: self,
             current_index: from,
-            last_index: from + take,
+            end_index: from + take,
         }
     }
 
+    pub fn lines_in<'a>(&'a self, range: Range<usize>) -> LinesIter<'a> {
+        LinesIter {
+            buf: self,
+            current_index: range.start,
+            end_index: range.end,
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn lines_from<'a>(&'a self, from: usize) -> LinesIter<'a> {
         LinesIter {
             buf: self,
             current_index: from,
-            last_index: self.line_count() - 1,
+            end_index: self.line_count() - 1,
         }
     }
 
@@ -127,14 +137,14 @@ fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize) {
 pub struct LinesIter<'a> {
     buf: &'a Buffer,
     current_index: usize,
-    last_index: usize,
+    end_index: usize,
 }
 
 impl<'a> Iterator for LinesIter<'a> {
     type Item = Line<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index >= self.last_index {
+        if self.current_index >= self.end_index {
             return None;
         }
 
@@ -148,7 +158,7 @@ pub struct BufferView {
     width: usize,
     height: usize,
 
-    row_offset: usize,
+    line_offset: usize,
     col_offset: usize,
 
     max_line_width: usize, // longest line width in current view
@@ -159,7 +169,7 @@ impl BufferView {
         BufferView {
             width: 0,
             height: 0,
-            row_offset: 0,
+            line_offset: 0,
             col_offset: 0,
             max_line_width: 0,
         }
@@ -173,8 +183,8 @@ impl BufferView {
         self.height
     }
 
-    pub fn row_offset(&self) -> usize {
-        self.row_offset
+    pub fn line_offset(&self) -> usize {
+        self.line_offset
     }
 
     pub fn visible_lines<'a>(
@@ -182,7 +192,7 @@ impl BufferView {
         buffer: &'a Buffer,
     ) -> impl Iterator<Item = Line<'a>> {
         buffer
-            .lines(self.row_offset, self.height)
+            .lines(self.line_offset, self.height)
             .map(|(index, line)| {
                 let line = if self.col_offset < line.len() {
                     &line[self.col_offset..]
@@ -197,17 +207,17 @@ impl BufferView {
     pub fn set_size(&mut self, width: usize, height: usize, buffer: &Buffer) {
         self.width = width;
         self.height = height;
-        self.set_row_offset(self.row_offset, buffer);
+        self.set_line_offset(self.line_offset, buffer);
         self.set_col_offset(self.col_offset);
     }
 
-    pub fn set_row_offset(&mut self, offset: usize, buffer: &Buffer) {
+    pub fn set_line_offset(&mut self, offset: usize, buffer: &Buffer) {
         let offset = self.clamp_row_offset(offset, buffer);
-        if offset != self.row_offset {
+        if offset != self.line_offset {
             self.max_line_width =
                 max_line_width(buffer.lines(offset, self.height));
         }
-        self.row_offset = offset;
+        self.line_offset = offset;
     }
 
     pub fn set_col_offset(&mut self, offset: usize) {
@@ -215,11 +225,11 @@ impl BufferView {
     }
 
     pub fn scroll_down(&mut self, lines: usize, buffer: &Buffer) {
-        self.set_row_offset(self.row_offset + lines, buffer);
+        self.set_line_offset(self.line_offset + lines, buffer);
     }
 
     pub fn scroll_up(&mut self, lines: usize, buffer: &Buffer) {
-        self.set_row_offset(self.row_offset.saturating_sub(lines), buffer);
+        self.set_line_offset(self.line_offset.saturating_sub(lines), buffer);
     }
 
     pub fn scroll_right(&mut self, cols: usize) {
@@ -231,7 +241,7 @@ impl BufferView {
     }
 
     pub fn scroll_to_row_end(&mut self, buffer: &Buffer) {
-        self.row_offset = buffer.line_count().saturating_sub(self.height);
+        self.line_offset = buffer.line_count().saturating_sub(self.height);
     }
 
     pub fn scroll_to_col_end(&mut self) {

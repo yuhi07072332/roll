@@ -1,8 +1,18 @@
-use std::{cmp, collections::{BTreeMap, BTreeSet}, ops::{ Range, Bound} };
+use std::{
+    char::MAX,
+    cmp,
+    collections::BTreeMap,
+    ops::{Bound, Range},
+    str::Utf8Error,
+};
 
 use crate::buffer::{Buffer, LinesIter};
 
-use regex::Regex;
+use regex::{Error as RegexError, Regex};
+
+use SearchDirection::*;
+
+const MAX_LINES_PER_SEARCH: usize = 512;
 
 pub enum SearchDirection {
     Forward,
@@ -13,40 +23,119 @@ pub type SearchMatch = Vec<Range<usize>>;
 
 pub struct SearchState {
     pattern: String,
+    regex: Regex,
     direction: SearchDirection,
     match_lines: BTreeMap<usize, SearchMatch>,
     coverage: ScanCoverage,
 }
 
 impl SearchState {
-    pub fn new(pattern: String, direction: SearchDirection) -> SearchState {
-        SearchState {
+    pub fn new(
+        pattern: String,
+        direction: SearchDirection,
+    ) -> Result<SearchState, RegexError> {
+        let regex = Regex::new(&pattern)?;
+        Ok(SearchState {
             pattern,
+            regex,
             direction,
             match_lines: BTreeMap::new(),
             coverage: ScanCoverage::default(),
-        }
+        })
+    }
+
+    pub fn pattern(&self) -> &str { &self.pattern }
+
+    pub fn is_done(&self, buffer: &Buffer) -> bool {
+        self.coverage.is_full(buffer.line_count())
     }
 
     pub fn match_at(&self, line_number: usize) -> Option<&SearchMatch> {
         self.match_lines.get(&line_number)
     }
 
+    pub fn next_match_from(
+        &mut self,
+        line_number: usize,
+        buffer: &Buffer,
+    ) -> Option<(&usize, &SearchMatch)> {
+        self.search_from(line_number, buffer).ok();
+        match self.direction {
+            Forward => self.next_match(line_number),
+            Backward => self.next_match_back(line_number),
+        }
+    }
+
+    pub fn prev_match_from(
+        &mut self,
+        line_number: usize,
+        buffer: &Buffer,
+    ) -> Option<(&usize, &SearchMatch)> {
+        self.search_from(line_number, buffer).ok();
+        match self.direction {
+            Forward => self.next_match_back(line_number),
+            Backward => self.next_match(line_number),
+        }
+    }
+
     pub fn search_from(
+        &mut self,
+        line_number: usize,
+        buffer: &Buffer,
+    ) -> Result<(), Utf8Error> {
+        let range = match self.direction {
+            Forward => line_number..line_number + MAX_LINES_PER_SEARCH,
+            Backward => line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1..line_number + 1,
+        };
+
+        self.search_in(range, buffer)
+    }
+
+    pub fn search_in(
         &mut self,
         line_range: Range<usize>,
         buffer: &Buffer,
-    ) {
-        self.coverage.add(line_range);
-
+    ) -> Result<(), Utf8Error> {
         let mut line = line_range.start;
-        while line < line_range.end {
-            if let Some(uncovered) = 
-                self.coverage.first_uncovered(line..line_range.end) {
-                
-            }
+        while line < line_range.end
+            && let Some(uncovered) =
+                self.coverage.first_uncovered(line..line_range.end)
+        {
+            search_in(
+                &self.regex,
+                buffer.lines_in(uncovered.clone()),
+                &mut self.match_lines,
+            )?;
+            line = uncovered.end;
         }
+
+        self.coverage.add(line_range.clone());
+        Ok(())
     }
+
+    fn next_match(&self, line_number: usize) -> Option<(&usize, &SearchMatch)> {
+        self.match_lines.range(line_number + 1..).next()
+    }
+
+    fn next_match_back(
+        &self,
+        line_number: usize,
+    ) -> Option<(&usize, &SearchMatch)> {
+        self.match_lines.range(..line_number).next_back()
+    }
+}
+
+fn search_in<'a>(
+    re: &Regex,
+    lines: LinesIter<'a>,
+    out: &mut BTreeMap<usize, SearchMatch>,
+) -> Result<(), Utf8Error> {
+    for (n, text) in lines {
+        let text = std::str::from_utf8(text)?;
+        re.find_iter(text)
+            .for_each(|m| out.entry(n).or_default().push(m.range()));
+    }
+    Ok(())
 }
 
 // A sorted, non-overlapping, merged range set.
@@ -71,8 +160,9 @@ impl ScanCoverage {
         (start < end).then_some(start..end)
     }
 
-    fn is_full(&self, lines: usize) -> bool {
-        self.0.len() == 1 && self.0.get(&0) == Some(&lines)
+    fn is_full(&self, line_count: usize) -> bool {
+        self.0.len() == 1
+            && self.0.get(&0) == Some(&line_count.saturating_sub(1))
     }
 
     fn add(&mut self, range: Range<usize>) {
@@ -80,18 +170,20 @@ impl ScanCoverage {
             return;
         }
 
-        let Range{mut start, mut end} = range;
+        let Range { mut start, mut end } = range;
 
         if let Some((left_start, left_end)) = self.get_left(range.start)
-            && range.start <= left_end {
+            && range.start <= left_end
+        {
             // merge range to left
             start = left_start;
             end = cmp::max(range.end, left_end);
             self.0.remove(&left_start);
         }
 
-        while let Some((right_start, right_end)) = self.get_right(start) 
-        && right_start <= end {
+        while let Some((right_start, right_end)) = self.get_right(start)
+            && right_start <= end
+        {
             // merge range to right
             end = cmp::max(end, right_end);
             self.0.remove(&right_start);
@@ -102,14 +194,16 @@ impl ScanCoverage {
 
     // find the first element in keys(..,range_start]
     fn get_left(&self, range_start: usize) -> Option<(usize, usize)> {
-        self.0.range(..=range_start)
+        self.0
+            .range(..=range_start)
             .next_back()
             .map(|(l, r)| (*l, *r))
     }
 
     // find the first element in keys(range_start,..)
     fn get_right(&self, range_start: usize) -> Option<(usize, usize)> {
-        self.0.range((Bound::Excluded(range_start), Bound::Unbounded))
+        self.0
+            .range((Bound::Excluded(range_start), Bound::Unbounded))
             .next()
             .map(|(l, r)| (*l, *r))
     }
@@ -205,5 +299,4 @@ mod tests {
 
         assert_eq!(ranges.first_uncovered(27..30), Some(27..30));
     }
-
 }

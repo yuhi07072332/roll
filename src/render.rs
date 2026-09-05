@@ -1,6 +1,5 @@
 use std::{
-    cmp,
-    io::{self, Stdout, Write},
+     cmp, io::{self, Stdout, Write},
 };
 
 use crossterm::{
@@ -96,7 +95,7 @@ impl Renderer {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
-        draw_view(&mut self.frame_buf, buffer, view, self.config.line_numbers)?;
+        draw_view(&mut self.frame_buf, mode, buffer, view, self.config.line_numbers)?;
 
         match mode {
             Mode::Normal => {
@@ -121,16 +120,9 @@ impl Renderer {
                 self.show_cursor()?
             }
             Mode::Search(state) => {
-                todo!()
-                /*
-                let message: String = if state.is_done {
-                    format!("match: ({}/{})", state.current_match_idx + 1, state.match_lines.len())
-                } else {
-                    String::from("match: ")
-                };
+                let message = format!("search: \'{}\'", state.pattern());
                 draw_status_line(&mut self.frame_buf, &message, view, buffer, size)?;
                 self.hide_cursor()?
-                */
             }
         }
 
@@ -162,17 +154,18 @@ fn line_number_width(buffer: &Buffer) -> usize {
 
 fn draw_view(
     frame_buf: &mut FrameBuf,
+    mode: &Mode,
     buffer: &Buffer,
     view: &BufferView,
     show_line_numbers: bool,
 ) -> io::Result<()> {
     frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
-    for (row_number, row) in view.visible_lines(buffer) {
+    for (line_number, line) in view.visible_lines(buffer) {
         if show_line_numbers {
             frame_buf.queue_cmd(PrintStyledContent(
                 format!(
                     "{:>width$} ",
-                    row_number + 1,
+                    line_number + 1,
                     width = line_number_width(buffer),
                 )
                 .dim(),
@@ -180,7 +173,7 @@ fn draw_view(
         }
 
         frame_buf
-            .queue(&row[..cmp::min(view.width(), row.len())])?
+            .queue(&line[..cmp::min(view.width(), line.len())])?
             .queue_cmd(cursor::MoveToNextLine(1))?;
     }
 
@@ -211,7 +204,7 @@ fn draw_status_line(
 ) -> io::Result<()> {
     let ScreenSize { width, height } = size;
     let row_index =
-        cmp::min(view.row_offset() + view.height(), buffer.line_count());
+        cmp::min(view.line_offset() + view.height(), buffer.line_count());
     let percentage = row_index
         .checked_mul(100)
         .and_then(|n| n.checked_div(buffer.line_count()))

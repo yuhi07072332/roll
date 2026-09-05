@@ -22,10 +22,10 @@ use crossterm::{
     style::{Color, Stylize},
 };
 
-use buffer::{BYTES_PER_READ, Buffer, BufferView, LinesIter};
+use buffer::{BYTES_PER_READ, Buffer, BufferView};
 use crossterm::tty::IsTty;
 use render::{RenderConfig, Renderer, SourceName};
-use search::{SearchDirection, SearchMatch, SearchState};
+use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
 
 #[derive(Parser, Debug)]
@@ -249,11 +249,10 @@ fn on_input_submit(
 ) -> anyhow::Result<Mode> {
     match action {
         InputAction::Search(direction) => {
-            let mut state = SearchState::new(input, direction);
-            state.search_from(view.row_offset(), buffer);
+            let mut state = SearchState::new(input, direction)?;
+            state.search_from(view.line_offset(), buffer)?;
             Ok(Mode::Search(state))
         }
-        _ => Ok(Mode::Normal),
     }
 }
 
@@ -289,7 +288,7 @@ fn handle_normal_input(
 
                 KeyCode::Home => view.set_col_offset(0),
                 KeyCode::End => view.scroll_to_col_end(),
-                KeyCode::Char('g') => view.set_row_offset(0, buffer),
+                KeyCode::Char('g') => view.set_line_offset(0, buffer),
                 KeyCode::Char('G') => view.scroll_to_row_end(buffer),
 
                 KeyCode::Char('/') => {
@@ -297,7 +296,14 @@ fn handle_normal_input(
                         InputBox::new(InputAction::Search(
                             SearchDirection::Forward,
                         ))
-                        .prefix(String::from("/")),
+                        .prefix(String::from("/"))
+                    );
+                }
+
+                KeyCode::Char('?') => {
+                    return Mode::Input(
+                        InputBox::new(InputAction::Search(SearchDirection::Backward))
+                        .prefix(String::from("?"))
                     );
                 }
 
@@ -381,14 +387,19 @@ fn handle_search_input(
 
     match modifiers {
         KeyModifiers::NONE | KeyModifiers::SHIFT => match code {
-            // TODO:
             KeyCode::Char('n') => {
-                //state.next_match();
-                // view.set_row_offset(state.current_match().line_index, buffer);
+                if let Some((n, _)) =
+                    state.next_match_from(view.line_offset(), buffer)
+                {
+                    view.set_line_offset(*n, buffer);
+                }
             }
             KeyCode::Char('p') => {
-                //state.prev_match();
-                // view.set_row_offset(state.current_match().line_index, buffer);
+                if let Some((n, _)) =
+                    state.prev_match_from(view.line_offset(), buffer)
+                {
+                    view.set_line_offset(*n, buffer);
+                }
             }
             KeyCode::Esc => return Mode::Normal,
             _ => (),
