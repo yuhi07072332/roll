@@ -20,7 +20,10 @@ pub struct TerminalGuard {}
 
 impl TerminalGuard {
     pub fn init() -> io::Result<TerminalGuard> {
-        initialize_terminal()?;
+        if let Err(e) = initialize_terminal() {
+            restore_terminal()?;
+            return Err(e);
+        }
 
         Ok(TerminalGuard {})
     }

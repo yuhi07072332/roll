@@ -136,6 +136,7 @@ impl Renderer {
     fn show_cursor(&mut self) -> io::Result<()> {
         if !self.is_cursor_visible {
             self.frame_buf.queue_cmd(cursor::Show)?;
+            self.is_cursor_visible = true;
         }
         Ok(())
     }
@@ -143,6 +144,7 @@ impl Renderer {
     fn hide_cursor(&mut self) -> io::Result<()> {
         if self.is_cursor_visible {
             self.frame_buf.queue_cmd(cursor::Hide)?;
+            self.is_cursor_visible = false;
         }
         Ok(())
     }

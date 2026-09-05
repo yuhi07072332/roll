@@ -2,6 +2,7 @@ mod buffer;
 mod output;
 mod search;
 mod terminal;
+mod input;
 
 use std::{
     io::{self, Read, Write},
@@ -16,7 +17,7 @@ use clap::Parser;
 
 use crossterm::{
     event::{
-        self, Event as TermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent,
+        self, Event as TermEvent, MouseEvent,
         MouseEventKind,
     },
     style::{Color, Stylize},
@@ -27,6 +28,7 @@ use crossterm::tty::IsTty;
 use output::{RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
+use input::{Key, SpecialKey::{*}};
 
 #[derive(Parser, Debug)]
 #[command(name = "roll")]
@@ -269,62 +271,43 @@ fn handle_normal_input(
     let half_page = view.height() / 2;
 
     match *event {
-        // characters
-        TermEvent::Key(KeyEvent {
-            code, modifiers, ..
-        }) if modifiers == KeyModifiers::NONE
-            || modifiers == KeyModifiers::SHIFT =>
-        {
-            match code {
-                KeyCode::Char('q') => on_exit(),
+        TermEvent::Key(key_event) => match Key::new(key_event) {
+            Key::Char('q') | Key::Sp(Esc) => on_exit(),
 
-                KeyCode::Char('j') | KeyCode::Down | KeyCode::Enter => {
-                    view.scroll_down(1, buffer)
-                }
-                KeyCode::Char('k') | KeyCode::Up => view.scroll_up(1, buffer),
+            Key::Char('j') | Key::Sp(Down) | Key::Sp(Enter) =>
+                view.scroll_down(1, buffer),
 
-                KeyCode::Char('l') | KeyCode::Right => view.scroll_right(1),
-                KeyCode::Char('h') | KeyCode::Left => view.scroll_left(1),
+            Key::Char('k') | Key::Sp(Up) => view.scroll_up(1, buffer),
 
-                KeyCode::PageDown => view.scroll_down(half_page, buffer),
-                KeyCode::PageUp => view.scroll_up(half_page, buffer),
+            Key::Char('l') | Key::Sp(Right) => view.scroll_right(1),
+            Key::Char('h') | Key::Sp(Left) => view.scroll_left(1),
 
-                KeyCode::Home => view.set_col_offset(0),
-                KeyCode::End => view.scroll_to_col_end(),
-                KeyCode::Char('g') => view.set_line_offset(0, buffer),
-                KeyCode::Char('G') => view.scroll_to_row_end(buffer),
+            Key::CtrlChar('d') | Key::Sp(PageDown) => view.scroll_down(half_page, buffer),
+            Key::CtrlChar('u') | Key::Sp(PageUp) => view.scroll_up(half_page, buffer),
 
-                KeyCode::Char('/') => {
-                    return Mode::Input(
-                        InputBox::new(InputAction::Search(
-                            SearchDirection::Forward,
-                        ))
+            Key::Sp(Home) => view.set_col_offset(0),
+            Key::Sp(End) => view.scroll_to_col_end(),
+            Key::Char('g') => view.set_line_offset(0, buffer),
+            Key::Char('G') => view.scroll_to_row_end(buffer),
+
+            Key::Char('/') => {
+                return Mode::Input(
+                    InputBox::new(InputAction::Search(
+                        SearchDirection::Forward,
+                    ))
                         .prefix(String::from("/"))
-                    );
-                }
-
-                KeyCode::Char('?') => {
-                    return Mode::Input(
-                        InputBox::new(InputAction::Search(SearchDirection::Backward))
-                        .prefix(String::from("?"))
-                    );
-                }
-
-                _ => (),
+                );
             }
+
+            Key::Char('?') => {
+                return Mode::Input(
+                    InputBox::new(InputAction::Search(SearchDirection::Backward))
+                        .prefix(String::from("?"))
+                );
+            }
+
+            _ => ()
         }
-
-        // with control
-        TermEvent::Key(KeyEvent {
-            code,
-            modifiers: KeyModifiers::CONTROL,
-            ..
-        }) => match code {
-            KeyCode::Char('d') => view.scroll_down(half_page, buffer),
-            KeyCode::Char('u') => view.scroll_up(half_page, buffer),
-
-            _ => (),
-        },
 
         TermEvent::Mouse(MouseEvent { kind, .. }) => match kind {
             MouseEventKind::ScrollDown => view.scroll_down(3, buffer),
@@ -337,6 +320,7 @@ fn handle_normal_input(
     mode
 }
 
+
 fn handle_inputbox_input(
     event: TermEvent,
     mut input_box: InputBox,
@@ -345,29 +329,22 @@ fn handle_inputbox_input(
         return InputResult::Continue(input_box);
     };
 
-    let KeyEvent {
-        code, modifiers, ..
-    } = key;
-
-    match modifiers {
-        KeyModifiers::NONE | KeyModifiers::SHIFT => match code {
-            KeyCode::Enter => {
-                return InputResult::Submit {
-                    input: input_box.input,
-                    action: input_box.action,
-                };
+    match Key::new(key) {
+        Key::Sp(Enter) => {
+            return InputResult::Submit {
+                input: input_box.input,
+                action: input_box.action,
+            };
+        }
+        Key::Sp(Esc) => return InputResult::Cancel,
+        Key::Sp(Backspace) => {
+            if input_box.input.pop().is_none() {
+                return InputResult::Cancel;
             }
-            KeyCode::Esc => return InputResult::Cancel,
-            KeyCode::Backspace => {
-                if input_box.input.pop().is_none() {
-                    return InputResult::Cancel;
-                }
-            }
-            KeyCode::Char(c) if !c.is_control() => {
-                input_box.input.push(c);
-            }
-            _ => (),
-        },
+        }
+        Key::Char(c) => {
+            input_box.input.push(c);
+        }
         _ => (),
     }
 
@@ -383,30 +360,22 @@ fn handle_search_input(
     let TermEvent::Key(key) = event else {
         return Mode::Search(state);
     };
-
-    let KeyEvent {
-        code, modifiers, ..
-    } = key;
-
-    match modifiers {
-        KeyModifiers::NONE | KeyModifiers::SHIFT => match code {
-            KeyCode::Char('n') => {
-                if let Some((n, _)) =
-                    state.next_match_from(view.line_offset(), buffer)
-                {
-                    view.set_line_offset(*n, buffer);
-                }
+    match Key::new(key) {
+        Key::Char('n') => {
+            if let Some((n, _)) =
+            state.next_match_from(view.line_offset(), buffer)
+            {
+                view.set_line_offset(*n, buffer);
             }
-            KeyCode::Char('p') => {
-                if let Some((n, _)) =
-                    state.prev_match_from(view.line_offset(), buffer)
-                {
-                    view.set_line_offset(*n, buffer);
-                }
+        }
+        Key::Char('p') => {
+            if let Some((n, _)) =
+            state.prev_match_from(view.line_offset(), buffer)
+            {
+                view.set_line_offset(*n, buffer);
             }
-            KeyCode::Esc => return Mode::Normal,
-            _ => (),
-        },
+        }
+        Key::Sp(Esc) => return Mode::Normal,
         _ => (),
     }
 
