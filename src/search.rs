@@ -15,13 +15,13 @@ pub enum SearchDirection {
     Backward,
 }
 
-pub type SearchMatch = Vec<Range<usize>>;
+pub type MatchLine = Vec<Range<usize>>;
 
 pub struct SearchState {
     pattern: String,
     regex: Regex,
     direction: SearchDirection,
-    match_lines: BTreeMap<usize, SearchMatch>,
+    match_lines: BTreeMap<usize, MatchLine>,
     coverage: ScanCoverage,
 }
 
@@ -48,7 +48,7 @@ impl SearchState {
         self.coverage.is_full(buffer.line_count())
     }
 
-    pub fn match_at(&self, line_number: usize) -> Option<&SearchMatch> {
+    pub fn match_at(&self, line_number: usize) -> Option<&MatchLine> {
         self.match_lines.get(&line_number)
     }
 
@@ -56,7 +56,7 @@ impl SearchState {
         &mut self,
         line_number: usize,
         buffer: &Buffer,
-    ) -> Option<(&usize, &SearchMatch)> {
+    ) -> Option<(&usize, &MatchLine)> {
         self.search_from(line_number, buffer).ok();
         match self.direction {
             Forward => self.next_match(line_number),
@@ -68,7 +68,7 @@ impl SearchState {
         &mut self,
         line_number: usize,
         buffer: &Buffer,
-    ) -> Option<(&usize, &SearchMatch)> {
+    ) -> Option<(&usize, &MatchLine)> {
         self.search_from(line_number, buffer).ok();
         match self.direction {
             Forward => self.next_match_back(line_number),
@@ -131,7 +131,7 @@ impl SearchState {
         Ok(())
     }
 
-    fn next_match(&self, line_number: usize) -> Option<(&usize, &SearchMatch)> {
+    fn next_match(&self, line_number: usize) -> Option<(&usize, &MatchLine)> {
         self.match_lines
             .range(line_number + 1..)
             .next()
@@ -141,7 +141,7 @@ impl SearchState {
     fn next_match_back(
         &self,
         line_number: usize,
-    ) -> Option<(&usize, &SearchMatch)> {
+    ) -> Option<(&usize, &MatchLine)> {
         self.match_lines
             .range(..line_number)
             .next_back()
@@ -152,7 +152,7 @@ impl SearchState {
 fn search_in<'a>(
     re: &Regex,
     lines: LinesIter<'a>,
-    out: &mut BTreeMap<usize, SearchMatch>,
+    out: &mut BTreeMap<usize, MatchLine>,
 ) -> Result<(), Utf8Error> {
     for (n, text) in lines {
         let text = std::str::from_utf8(text)?;
