@@ -43,7 +43,9 @@ impl SearchState {
         })
     }
 
-    pub fn pattern(&self) -> &str { &self.pattern }
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
 
     pub fn is_done(&self, buffer: &Buffer) -> bool {
         self.coverage.is_full(buffer.line_count())
@@ -84,7 +86,10 @@ impl SearchState {
     ) -> Result<(), Utf8Error> {
         let range = match self.direction {
             Forward => line_number..line_number + MAX_LINES_PER_SEARCH,
-            Backward => line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1..line_number + 1,
+            Backward => {
+                line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1
+                    ..line_number + 1
+            }
         };
 
         self.search_in(range, buffer)

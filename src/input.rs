@@ -1,8 +1,4 @@
-use crossterm::event::{
-    KeyCode,
-    KeyEvent,
-    KeyModifiers
-};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Key {
@@ -16,7 +12,7 @@ pub enum Key {
     #[allow(dead_code)]
     Shift(SpecialKey),
 
-    Unknown
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,20 +32,22 @@ pub enum SpecialKey {
 
 impl Key {
     pub fn new(key_event: KeyEvent) -> Key {
-        let KeyEvent { code, modifiers, .. } = key_event;
+        let KeyEvent {
+            code, modifiers, ..
+        } = key_event;
 
         match code {
             KeyCode::Char(c) => match modifiers {
                 KeyModifiers::NONE | KeyModifiers::SHIFT => Key::Char(c),
                 KeyModifiers::CONTROL => Key::CtrlChar(c),
-                _ => Key::Unknown
-            }
+                _ => Key::Unknown,
+            },
             code => match modifiers {
                 KeyModifiers::NONE => Key::Sp(SpecialKey::new(code)),
                 KeyModifiers::CONTROL => Key::Ctrl(SpecialKey::new(code)),
                 KeyModifiers::SHIFT => Key::Shift(SpecialKey::new(code)),
-                _ => Key::Unknown
-            }
+                _ => Key::Unknown,
+            },
         }
     }
 }
@@ -68,7 +66,7 @@ impl SpecialKey {
             KeyCode::PageDown => SpecialKey::PageDown,
             KeyCode::Home => SpecialKey::Home,
             KeyCode::End => SpecialKey::End,
-            _ => panic!("SpecialKey::new()")
+            _ => panic!("SpecialKey::new()"),
         }
     }
 }

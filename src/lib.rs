@@ -1,8 +1,8 @@
 mod buffer;
+mod input;
 mod output;
 mod search;
 mod terminal;
-mod input;
 
 use std::{
     io::{self, Read, Write},
@@ -16,19 +16,16 @@ use anyhow::bail;
 use clap::Parser;
 
 use crossterm::{
-    event::{
-        self, Event as TermEvent, MouseEvent,
-        MouseEventKind,
-    },
+    event::{self, Event as TermEvent, MouseEvent, MouseEventKind},
     style::{Color, Stylize},
 };
 
 use buffer::{BYTES_PER_READ, Buffer, BufferView};
 use crossterm::tty::IsTty;
+use input::{Key, SpecialKey::*};
 use output::{RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
-use input::{Key, SpecialKey::{*}};
 
 #[derive(Parser, Debug)]
 #[command(name = "roll")]
@@ -104,7 +101,7 @@ fn print_buffer(buffer: &Buffer) -> io::Result<()> {
 }
 
 pub fn run() -> anyhow::Result<()> {
-    let args = Args::parse();
+    let args = Args::try_parse()?;
 
     let (tx, rx) = mpsc::channel::<Event>();
 
@@ -122,7 +119,7 @@ pub fn run() -> anyhow::Result<()> {
         source_name = SourceName::Stdin;
         let stdin_sender = tx.clone();
         thread::spawn(move || send_from_stdin(stdin_sender));
-        Buffer::from_stdin()?
+        Buffer::from_stdin()
     };
 
     thread::spawn(move || send_from_terminal_event(tx));
@@ -253,7 +250,9 @@ fn on_input_submit(
         InputAction::Search(direction) => {
             let mut state = SearchState::new(input, direction)?;
             state.search_from(view.line_offset(), buffer)?;
-            if let Some((n, _)) = state.next_match_from(view.line_offset(), buffer) {
+            if let Some((n, _)) =
+                state.next_match_from(view.line_offset(), buffer)
+            {
                 view.set_line_offset(*n, buffer);
             }
             Ok(Mode::Search(state))
@@ -274,16 +273,21 @@ fn handle_normal_input(
         TermEvent::Key(key_event) => match Key::new(key_event) {
             Key::Char('q') | Key::Sp(Esc) => on_exit(),
 
-            Key::Char('j') | Key::Sp(Down) | Key::Sp(Enter) =>
-                view.scroll_down(1, buffer),
+            Key::Char('j') | Key::Sp(Down) | Key::Sp(Enter) => {
+                view.scroll_down(1, buffer)
+            }
 
             Key::Char('k') | Key::Sp(Up) => view.scroll_up(1, buffer),
 
             Key::Char('l') | Key::Sp(Right) => view.scroll_right(1),
             Key::Char('h') | Key::Sp(Left) => view.scroll_left(1),
 
-            Key::CtrlChar('d') | Key::Sp(PageDown) => view.scroll_down(half_page, buffer),
-            Key::CtrlChar('u') | Key::Sp(PageUp) => view.scroll_up(half_page, buffer),
+            Key::CtrlChar('d') | Key::Sp(PageDown) => {
+                view.scroll_down(half_page, buffer)
+            }
+            Key::CtrlChar('u') | Key::Sp(PageUp) => {
+                view.scroll_up(half_page, buffer)
+            }
 
             Key::Sp(Home) => view.set_col_offset(0),
             Key::Sp(End) => view.scroll_to_col_end(),
@@ -295,19 +299,21 @@ fn handle_normal_input(
                     InputBox::new(InputAction::Search(
                         SearchDirection::Forward,
                     ))
-                        .prefix(String::from("/"))
+                    .prefix(String::from("/")),
                 );
             }
 
             Key::Char('?') => {
                 return Mode::Input(
-                    InputBox::new(InputAction::Search(SearchDirection::Backward))
-                        .prefix(String::from("?"))
+                    InputBox::new(InputAction::Search(
+                        SearchDirection::Backward,
+                    ))
+                    .prefix(String::from("?")),
                 );
             }
 
-            _ => ()
-        }
+            _ => (),
+        },
 
         TermEvent::Mouse(MouseEvent { kind, .. }) => match kind {
             MouseEventKind::ScrollDown => view.scroll_down(3, buffer),
@@ -319,7 +325,6 @@ fn handle_normal_input(
 
     mode
 }
-
 
 fn handle_inputbox_input(
     event: TermEvent,
@@ -363,14 +368,14 @@ fn handle_search_input(
     match Key::new(key) {
         Key::Char('n') => {
             if let Some((n, _)) =
-            state.next_match_from(view.line_offset(), buffer)
+                state.next_match_from(view.line_offset(), buffer)
             {
                 view.set_line_offset(*n, buffer);
             }
         }
         Key::Char('p') => {
             if let Some((n, _)) =
-            state.prev_match_from(view.line_offset(), buffer)
+                state.prev_match_from(view.line_offset(), buffer)
             {
                 view.set_line_offset(*n, buffer);
             }

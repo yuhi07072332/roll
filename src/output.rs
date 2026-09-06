@@ -1,5 +1,6 @@
 use std::{
-     cmp, io::{self, Stdout, Write},
+    cmp,
+    io::{self, Stdout, Write},
 };
 
 use crossterm::{
@@ -95,7 +96,13 @@ impl Renderer {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
-        draw_view(&mut self.frame_buf, mode, buffer, view, self.config.line_numbers)?;
+        draw_view(
+            &mut self.frame_buf,
+            mode,
+            buffer,
+            view,
+            self.config.line_numbers,
+        )?;
 
         match mode {
             Mode::Normal => {
@@ -121,7 +128,13 @@ impl Renderer {
             }
             Mode::Search(state) => {
                 let message = format!("search: \'{}\'", state.pattern());
-                draw_status_line(&mut self.frame_buf, &message, view, buffer, size)?;
+                draw_status_line(
+                    &mut self.frame_buf,
+                    &message,
+                    view,
+                    buffer,
+                    size,
+                )?;
                 self.hide_cursor()?
             }
         }
@@ -152,6 +165,17 @@ impl Renderer {
 
 fn line_number_width(buffer: &Buffer) -> usize {
     (buffer.line_count().checked_ilog10().unwrap_or(0) + 1) as usize
+}
+
+fn truncate_left(text: &str, width: usize) -> &str {
+    &text[cmp::min(
+        text.len().saturating_sub(width),
+        text.len().saturating_sub(1),
+    )..]
+}
+
+fn truncate_right(text: &str, width: usize) -> &str {
+    &text[..cmp::min(width, text.len().saturating_sub(1))]
 }
 
 fn draw_view(
@@ -187,12 +211,14 @@ fn draw_input_box(
     input_box: &InputBox,
     size: ScreenSize,
 ) -> io::Result<()> {
+    let input: &str = &input_box.input;
     let prefix = input_box.prefix.as_deref().unwrap_or("");
+    let input_text = truncate_left(input, size.width as usize - 1);
 
     frame_buf
         .queue_cmd(cursor::MoveTo(0, size.height.saturating_sub(1)))?
         .queue_cmd(PrintStyledContent(prefix.cyan()))?
-        .queue(input_box.input.as_bytes())?;
+        .queue(input_text.as_bytes())?;
 
     Ok(())
 }
@@ -219,7 +245,7 @@ fn draw_status_line(
 
     frame_buf
         .queue_cmd(cursor::MoveToColumn(0))?
-        .queue_cmd(Print(message))?
+        .queue_cmd(Print(truncate_right(message, size.width as usize - 15)))?
         .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
         .queue_cmd(Print(format!(
             "({:>3}/{:>3}) {:>3}%",

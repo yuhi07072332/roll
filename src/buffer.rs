@@ -10,7 +10,7 @@ pub type Line<'a> = (usize, &'a [u8]);
 
 pub const BYTES_PER_READ: usize = 512;
 
-#[derive(Default)]
+#[derive(Debug)]
 pub struct Buffer {
     data: Vec<u8>,
     line_starts: Vec<usize>,
@@ -19,23 +19,11 @@ pub struct Buffer {
 
 impl Buffer {
     pub fn from_file(path: &Path) -> io::Result<Buffer> {
-        let data = fs::read(path)?;
-        let mut line_starts: Vec<usize> = Vec::new();
-        scan_line_starts(&mut line_starts, &data, 0);
-
-        Ok(Buffer {
-            data,
-            line_starts,
-            is_reading: false,
-        })
+        Ok(Self::from_bytes(fs::read(path)?))
     }
 
-    pub fn from_stdin() -> io::Result<Buffer> {
-        Ok(Buffer {
-            data: Vec::new(),
-            line_starts: Vec::new(),
-            is_reading: true,
-        })
+    pub fn from_stdin() -> Buffer {
+        Self::default()
     }
 
     pub fn is_reading(&self) -> bool {
@@ -91,12 +79,23 @@ impl Buffer {
         LinesIter {
             buf: self,
             current_index: from,
-            end_index: self.line_count() - 1,
+            end_index: self.line_count()
         }
     }
 
     pub fn line_count(&self) -> usize {
         self.line_starts.len().saturating_sub(1)
+    }
+
+    fn from_bytes(data: Vec<u8>) -> Buffer {
+        let mut line_starts: Vec<usize> = Vec::new();
+        scan_line_starts(&mut line_starts, &data, 0);
+
+        Buffer {
+            data,
+            line_starts,
+            is_reading: false,
+        }
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) {
@@ -110,6 +109,16 @@ impl Buffer {
         let old_len = self.data.len();
         self.data.extend_from_slice(bytes);
         scan_line_starts(&mut self.line_starts, &self.data, old_len);
+    }
+}
+
+impl Default for Buffer {
+    fn default() -> Buffer {
+        Buffer {
+            data: Vec::new(),
+            line_starts: Vec::new(),
+            is_reading: true,
+        }
     }
 }
 
@@ -261,4 +270,71 @@ impl BufferView {
 
 fn max_line_width(lines: LinesIter<'_>) -> usize {
     lines.map(|(_, line)| line.len()).max().unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer(bytes: &[u8]) -> Buffer {
+        Buffer::from_bytes(Vec::from(bytes))
+    }
+
+    #[test]
+    fn buffer_lines_iter() {
+        let buf = buffer(b"first line\nsecond line\nthird line");
+        let mut iter = buf.lines_from(0);
+
+        assert!(!buf.is_reading());
+        assert_eq!(buf.line_count(), 3);
+        assert_eq!(iter.next(), Some((0usize, &b"first line"[..])));
+        assert_eq!(iter.next(), Some((1usize, &b"second line"[..])));
+        assert_eq!(iter.next(), Some((2usize, &b"third line"[..])));
+    }
+
+    #[test]
+    fn buffer_lines_handles_crnl() {
+        let buf = buffer(b"first line\r\nsecond\rline\r\nthird line\n\r");
+
+        assert_eq!(buf.line_count(), 4);
+        assert_eq!(buf.line_at(0), Some(&b"first line"[..]));
+        assert_eq!(buf.line_at(1), Some(&b"second\rline"[..]));
+        assert_eq!(buf.line_at(2), Some(&b"third line"[..]));
+        assert_eq!(buf.line_at(3), Some(&b"\r"[..]));
+    }
+
+
+    #[test]
+    fn line_count_handles_empty_and_trailing_newline_input() {
+        let buf = buffer(b"a\n\nb\nc");
+
+        assert_eq!(buf.line_count(), 4);
+        assert_eq!(buf.line_at(0), Some(&b"a"[..]));
+        assert_eq!(buf.line_at(1), Some(&b""[..]));
+        assert_eq!(buf.line_at(2), Some(&b"b"[..]));
+        assert_eq!(buf.line_at(3), Some(&b"c"[..]));
+    }
+
+    #[test]
+    fn buffer_accumulates_bytes() {
+        let mut buf = Buffer::default();
+
+        buf.append_bytes(b"hello");
+        assert_eq!(buf.line_count(), 1);
+        assert_eq!(buf.line_at(0), Some(&b"hello"[..]));
+
+        buf.append_bytes(b" world\n");
+        assert_eq!(buf.line_count(), 1);
+        assert_eq!(buf.line_at(0), Some(&b"hello world"[..]));
+
+        buf.append_bytes(b"!!!");
+        assert_eq!(buf.line_count(), 2);
+        assert_eq!(buf.line_at(0), Some(&b"hello world"[..]));
+        assert_eq!(buf.line_at(1), Some(&b"!!!"[..]));
+
+        buf.append_bytes(b"\nabcde\nfg");
+        assert_eq!(buf.line_at(1), Some(&b"!!!"[..]));
+        assert_eq!(buf.line_at(2), Some(&b"abcde"[..]));
+        assert_eq!(buf.line_at(3), Some(&b"fg"[..]));
+    }
 }
