@@ -1,8 +1,5 @@
 use std::{
-    cmp,
-    collections::BTreeMap,
-    ops::{Bound, Range},
-    str::Utf8Error,
+    char::MAX, cmp, collections::BTreeMap, ops::{Bound, Range}, str::Utf8Error,
 };
 
 use crate::buffer::{Buffer, LinesIter};
@@ -84,15 +81,32 @@ impl SearchState {
         line_number: usize,
         buffer: &Buffer,
     ) -> Result<(), Utf8Error> {
-        let range = match self.direction {
-            Forward => line_number..line_number + MAX_LINES_PER_SEARCH,
+        let (range, wrapped_range) = match self.direction {
+            Forward => {
+                let end = line_number + MAX_LINES_PER_SEARCH;
+                (
+                    line_number..end,
+                    (end > buffer.line_count()).then_some(
+                        0..end % buffer.line_count()
+                    )
+                )},
             Backward => {
-                line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1
-                    ..line_number + 1
+                (
+                    line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1..line_number + 1,
+                    (MAX_LINES_PER_SEARCH > line_number).then_some(
+                        buffer.line_count().saturating_sub(MAX_LINES_PER_SEARCH)
+                        ..buffer.line_count()
+                    )
+                )
             }
         };
 
-        self.search_in(range, buffer)
+        self.search_in(range, buffer)?;
+        if let Some(wrapped) = wrapped_range {
+            self.search_in(wrapped, buffer)?;
+        }
+
+        Ok(())
     }
 
     pub fn search_in(
@@ -118,14 +132,20 @@ impl SearchState {
     }
 
     fn next_match(&self, line_number: usize) -> Option<(&usize, &SearchMatch)> {
-        self.match_lines.range(line_number + 1..).next()
+        self.match_lines
+            .range(line_number + 1..)
+            .next()
+            .or(self.match_lines.first_key_value())
     }
 
     fn next_match_back(
         &self,
         line_number: usize,
     ) -> Option<(&usize, &SearchMatch)> {
-        self.match_lines.range(..line_number).next_back()
+        self.match_lines
+            .range(..line_number)
+            .next_back()
+            .or(self.match_lines.last_key_value())
     }
 }
 

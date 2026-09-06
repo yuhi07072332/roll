@@ -221,7 +221,6 @@ impl BufferView {
     }
 
     pub fn set_line_offset(&mut self, offset: usize, buffer: &Buffer) {
-        let offset = self.clamp_row_offset(offset, buffer);
         if offset != self.line_offset {
             self.max_line_width =
                 max_line_width(buffer.lines(offset, self.height));
@@ -230,26 +229,31 @@ impl BufferView {
     }
 
     pub fn set_col_offset(&mut self, offset: usize) {
-        self.col_offset = self.clamp_col_offset(offset);
+        self.col_offset = offset
     }
 
-    pub fn scroll_down(&mut self, lines: usize, buffer: &Buffer) {
-        self.set_line_offset(self.line_offset + lines, buffer);
+    pub fn scroll_lines(&mut self, lines: isize, buffer: &Buffer) {
+        self.set_line_offset(
+            self.line_offset.saturating_add_signed(lines),
+            buffer,
+        );
     }
 
-    pub fn scroll_up(&mut self, lines: usize, buffer: &Buffer) {
-        self.set_line_offset(self.line_offset.saturating_sub(lines), buffer);
+    pub fn scroll_lines_clamp(&mut self, lines: isize, buffer: &Buffer) {
+        self.scroll_lines(lines, buffer);
+        self.clamp_line_offset(buffer);
     }
 
-    pub fn scroll_right(&mut self, cols: usize) {
-        self.set_col_offset(self.col_offset + cols);
+    pub fn scroll_cols(&mut self, cols: isize) {
+        self.set_col_offset(self.col_offset.saturating_add_signed(cols));
     }
 
-    pub fn scroll_left(&mut self, cols: usize) {
-        self.set_col_offset(self.col_offset.saturating_sub(cols));
+    pub fn scroll_cols_clamp(&mut self, cols: isize) {
+        self.scroll_cols(cols);
+        self.clamp_col_offset();
     }
 
-    pub fn scroll_to_row_end(&mut self, buffer: &Buffer) {
+    pub fn scroll_to_line_end(&mut self, buffer: &Buffer) {
         self.line_offset = buffer.line_count().saturating_sub(self.height);
     }
 
@@ -257,14 +261,14 @@ impl BufferView {
         self.col_offset = self.max_line_width.saturating_sub(self.width);
     }
 
-    fn clamp_row_offset(&self, offset: usize, buffer: &Buffer) -> usize {
-        let max_offset = buffer.line_count().saturating_sub(self.height);
-        cmp::min(offset, max_offset)
+    fn clamp_line_offset(&mut self, buffer: &Buffer) {
+        let visible_max_offset = buffer.line_count().saturating_sub(self.height);
+        self.line_offset = cmp::min(self.line_offset, visible_max_offset);
     }
 
-    fn clamp_col_offset(&self, offset: usize) -> usize {
-        let max_offset = self.max_line_width.saturating_sub(self.width);
-        cmp::min(offset, max_offset)
+    fn clamp_col_offset(&self) -> usize {
+        let visible_max_offset = self.max_line_width.saturating_sub(self.width);
+        cmp::min(self.col_offset, visible_max_offset)
     }
 }
 

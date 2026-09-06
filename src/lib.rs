@@ -53,6 +53,12 @@ enum Mode {
     Search(SearchState),
 }
 
+impl Mode {
+    fn is_normal(&self) -> bool { matches!(self, Mode::Normal) }
+    fn is_input(&self) -> bool { matches!(self, Mode::Input(_)) }
+    fn is_search(&self) -> bool { matches!(self, Mode::Search(_)) }
+}
+
 enum InputAction {
     Search(SearchDirection),
 }
@@ -267,32 +273,33 @@ fn handle_normal_input(
     view: &mut BufferView,
     on_exit: impl FnOnce(),
 ) -> Mode {
-    let half_page = view.height() / 2;
+    let half_page= view.height() as isize / 2;
 
     match *event {
         TermEvent::Key(key_event) => match Key::new(key_event) {
-            Key::Char('q') | Key::Sp(Esc) => on_exit(),
+            Key::Char('q') => on_exit(),
+            Key::Sp(Esc) if mode.is_normal() => on_exit(),
 
             Key::Char('j') | Key::Sp(Down) | Key::Sp(Enter) => {
-                view.scroll_down(1, buffer)
+                view.scroll_lines_clamp(1, buffer)
             }
 
-            Key::Char('k') | Key::Sp(Up) => view.scroll_up(1, buffer),
+            Key::Char('k') | Key::Sp(Up) => view.scroll_lines_clamp(-1, buffer),
 
-            Key::Char('l') | Key::Sp(Right) => view.scroll_right(1),
-            Key::Char('h') | Key::Sp(Left) => view.scroll_left(1),
+            Key::Char('l') | Key::Sp(Right) => view.scroll_cols_clamp(1),
+            Key::Char('h') | Key::Sp(Left) => view.scroll_cols_clamp(-1),
 
             Key::CtrlChar('d') | Key::Sp(PageDown) => {
-                view.scroll_down(half_page, buffer)
+                view.scroll_lines_clamp(half_page, buffer)
             }
             Key::CtrlChar('u') | Key::Sp(PageUp) => {
-                view.scroll_up(half_page, buffer)
+                view.scroll_lines_clamp(-half_page, buffer)
             }
 
             Key::Sp(Home) => view.set_col_offset(0),
             Key::Sp(End) => view.scroll_to_col_end(),
             Key::Char('g') => view.set_line_offset(0, buffer),
-            Key::Char('G') => view.scroll_to_row_end(buffer),
+            Key::Char('G') => view.scroll_to_line_end(buffer),
 
             Key::Char('/') => {
                 return Mode::Input(
@@ -316,8 +323,8 @@ fn handle_normal_input(
         },
 
         TermEvent::Mouse(MouseEvent { kind, .. }) => match kind {
-            MouseEventKind::ScrollDown => view.scroll_down(3, buffer),
-            MouseEventKind::ScrollUp => view.scroll_up(3, buffer),
+            MouseEventKind::ScrollDown => view.scroll_lines_clamp(3, buffer),
+            MouseEventKind::ScrollUp => view.scroll_lines_clamp(-3, buffer),
             _ => (),
         },
         _ => (),
