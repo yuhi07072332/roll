@@ -13,7 +13,10 @@ const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
 
 use crate::{
     InputBox, Mode, ScreenSize,
-    buffer::{Buffer, BufferView},
+    view::{
+        BufferView,
+        buffer::Buffer
+    }
 };
 
 pub enum SourceName {

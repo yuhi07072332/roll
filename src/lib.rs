@@ -1,9 +1,3 @@
-mod buffer;
-mod input;
-mod output;
-mod search;
-mod terminal;
-
 use std::{
     io::{self, Read, Write},
     path::PathBuf,
@@ -20,12 +14,22 @@ use crossterm::{
     style::{Color, Stylize},
 };
 
-use buffer::{BYTES_PER_READ, Buffer, BufferView};
+use view::{
+    BufferView,
+    buffer::{BYTES_PER_READ, Buffer}
+};
+
 use crossterm::tty::IsTty;
 use input::{Key, SpecialKey::*};
 use output::{RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
+
+mod view;
+mod input;
+mod output;
+mod search;
+mod terminal;
 
 #[derive(Parser, Debug)]
 #[command(name = "roll")]

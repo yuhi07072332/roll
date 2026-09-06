@@ -1,8 +1,8 @@
 use std::{
-    char::MAX, cmp, collections::BTreeMap, ops::{Bound, Range}, str::Utf8Error,
+    cmp, collections::BTreeMap, ops::{Bound, Range}, str::Utf8Error,
 };
 
-use crate::buffer::{Buffer, LinesIter};
+use crate::view::buffer::{Buffer, LinesIter};
 
 use regex::{Error as RegexError, Regex};
 
