@@ -12,24 +12,20 @@ use clap::Parser;
 use crossterm::{
     event::{self, Event as TermEvent, MouseEvent, MouseEventKind},
     style::{Color, Stylize},
+    tty::IsTty,
 };
 
-use view::{
-    BufferView,
-    buffer::{BYTES_PER_READ, Buffer}
-};
-
-use crossterm::tty::IsTty;
 use input::{Key, SpecialKey::*};
 use output::{RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
+use view::{BYTES_PER_READ, Buffer, View};
 
-mod view;
 mod input;
 mod output;
 mod search;
 mod terminal;
+mod view;
 
 #[derive(Parser, Debug)]
 #[command(name = "roll")]
@@ -58,9 +54,15 @@ enum Mode {
 }
 
 impl Mode {
-    fn is_normal(&self) -> bool { matches!(self, Mode::Normal) }
-    fn is_input(&self) -> bool { matches!(self, Mode::Input(_)) }
-    fn is_search(&self) -> bool { matches!(self, Mode::Search(_)) }
+    fn is_normal(&self) -> bool {
+        matches!(self, Mode::Normal)
+    }
+    fn is_input(&self) -> bool {
+        matches!(self, Mode::Input(_))
+    }
+    fn is_search(&self) -> bool {
+        matches!(self, Mode::Search(_))
+    }
 }
 
 enum InputAction {
@@ -151,7 +153,7 @@ fn run_loop(
     receiver: Receiver<Event>,
 ) -> anyhow::Result<()> {
     let terminal = TerminalGuard::init()?;
-    let mut view = BufferView::new();
+    let mut view = View::new();
     let mut renderer = Renderer::new(render_config);
     let mut screen_size = terminal::size()?;
     let mut mode = Mode::Normal;
@@ -159,6 +161,7 @@ fn run_loop(
     let mut needs_exit: bool = false;
     while !needs_exit {
         renderer.resize_view(&mut view, screen_size, &buffer);
+        view.ensure_visible_lines(&buffer);
         renderer.draw_frame(&buffer, &view, &mode, screen_size)?;
 
         match receiver.recv()? {
@@ -222,7 +225,7 @@ fn handle_input(
     event: TermEvent,
     mode: Mode,
     buffer: &Buffer,
-    view: &mut BufferView,
+    view: &mut View,
     on_exit: impl FnOnce(),
 ) -> anyhow::Result<Mode> {
     match mode {
@@ -254,7 +257,7 @@ fn on_input_submit(
     input: String,
     action: InputAction,
     buffer: &Buffer,
-    view: &mut BufferView,
+    view: &mut View,
 ) -> anyhow::Result<Mode> {
     match action {
         InputAction::Search(direction) => {
@@ -274,10 +277,10 @@ fn handle_normal_input(
     mode: Mode,
     event: &TermEvent,
     buffer: &Buffer,
-    view: &mut BufferView,
+    view: &mut View,
     on_exit: impl FnOnce(),
 ) -> Mode {
-    let half_page= view.height() as isize / 2;
+    let half_page = view.height() as isize / 2;
 
     match *event {
         TermEvent::Key(key_event) => match Key::new(key_event) {
@@ -371,7 +374,7 @@ fn handle_search_input(
     event: TermEvent,
     mut state: SearchState,
     buffer: &Buffer,
-    view: &mut BufferView,
+    view: &mut View,
 ) -> Mode {
     let TermEvent::Key(key) = event else {
         return Mode::Search(state);

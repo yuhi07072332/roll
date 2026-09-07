@@ -1,10 +1,13 @@
-use std::cmp;
+use std::{cmp, collections::VecDeque, ops::Range};
 
-use buffer::{Buffer, LinesIter, Line};
+pub use buffer::{BYTES_PER_READ, Buffer, Line, LinesIter};
+pub use render::{ RenderedLine, RenderLineConfig };
 
-pub mod buffer;
-pub mod render;
-pub struct BufferView {
+mod buffer;
+mod render;
+
+const RENDER_CACHE_CAPACITY: usize = 512;
+pub struct View {
     width: usize,
     height: usize,
 
@@ -12,16 +15,19 @@ pub struct BufferView {
     col_offset: usize,
 
     max_line_width: usize, // longest line width in current view
+
+    render_cache: RenderCache,
 }
 
-impl BufferView {
-    pub fn new() -> BufferView {
-        BufferView {
+impl View {
+    pub fn new() -> View {
+        View {
             width: 0,
             height: 0,
             line_offset: 0,
             col_offset: 0,
             max_line_width: 0,
+            render_cache: RenderCache::new(),
         }
     }
 
@@ -37,21 +43,17 @@ impl BufferView {
         self.line_offset
     }
 
-    pub fn visible_lines<'a>(
+    pub fn visible_lines(
         &self,
-        buffer: &'a Buffer,
-    ) -> impl Iterator<Item = Line<'a>> {
-        buffer
-            .lines(self.line_offset, self.height)
-            .map(|(index, line)| {
-                let line = if self.col_offset < line.len() {
-                    &line[self.col_offset..]
-                } else {
-                    &[]
-                };
+    ) -> impl Iterator<Item = &RenderedLine> {
+        self.render_cache.lines(self.line_offset, self.height)
+    }
 
-                (index, line)
-            })
+    pub fn ensure_visible_lines(&mut self, buffer: &Buffer) {
+        self.render_cache.ensure_lines(
+            self.line_offset..self.line_offset + self.height,
+            buffer,
+        );
     }
 
     pub fn set_size(&mut self, width: usize, height: usize, buffer: &Buffer) {
@@ -103,7 +105,8 @@ impl BufferView {
     }
 
     fn clamp_line_offset(&mut self, buffer: &Buffer) {
-        let visible_max_offset = buffer.line_count().saturating_sub(self.height);
+        let visible_max_offset =
+            buffer.line_count().saturating_sub(self.height);
         self.line_offset = cmp::min(self.line_offset, visible_max_offset);
     }
 
@@ -117,3 +120,119 @@ fn max_line_width(lines: LinesIter<'_>) -> usize {
     lines.map(|(_, line)| line.len()).max().unwrap_or(0)
 }
 
+struct RenderCache {
+    rlines: VecDeque<RenderedLine>,
+}
+
+impl RenderCache {
+    pub fn new() -> RenderCache {
+        RenderCache {
+            rlines: VecDeque::with_capacity(RENDER_CACHE_CAPACITY),
+        }
+    }
+
+    pub fn lines(&self, from: usize, take: usize) -> impl Iterator<Item = &RenderedLine> {
+        self.rlines.iter()
+            .skip_while(move |line| { line.line_number < from })
+            .take(take)
+    }
+
+    pub fn ensure_lines(&mut self, visible: Range<usize>, buffer: &Buffer) {
+        const HALF_CAPACITY: usize = RENDER_CACHE_CAPACITY / 2;
+
+        let mut left_range = None;
+        let mut right_range = None;
+        if let Some(cache_range) = self.cache_range() {
+            left_range = visible
+                .overlaps_right_only(&cache_range)
+                .then_some(visible.start..cache_range.start);
+            right_range = visible
+                .overlaps_left_only(&cache_range)
+                .then_some(cache_range.end..visible.end);
+        }
+
+        let mut left_remaining = 0;
+
+        if let Some(range) = left_range {
+            let start = range.start.saturating_sub(HALF_CAPACITY);
+            left_remaining = HALF_CAPACITY.saturating_sub(range.start);
+            self.add_front(start..range.end, buffer);
+        }
+
+        if let Some(range) = right_range {
+            let end = range.end + HALF_CAPACITY + left_remaining;
+            self.add_back(range.start..end, buffer);
+        }
+    }
+
+    fn add_front(&mut self, line_range: Range<usize>, buffer: &Buffer) {
+        self.add(line_range, buffer, VecDeque::push_front, VecDeque::pop_back)
+    }
+
+    fn add_back(&mut self, line_range: Range<usize>, buffer: &Buffer) {
+        self.add(line_range, buffer, VecDeque::push_back, VecDeque::pop_front)
+    }
+
+    fn add(
+        &mut self,
+        line_range: Range<usize>,
+        buffer: &Buffer,
+        push_fn: fn(&mut VecDeque<RenderedLine>, RenderedLine),
+        pop_fn: fn(&mut VecDeque<RenderedLine>) -> Option<RenderedLine>,
+    ) {
+        if line_range.is_empty() {
+            return;
+        }
+
+        while self.rlines.len() + line_range.len() > RENDER_CACHE_CAPACITY {
+            pop_fn(&mut self.rlines);
+        }
+
+        buffer.lines_in(line_range).rev().for_each(|(n, text)| {
+            push_fn(
+                &mut self.rlines,
+                RenderedLine::new(text, n, RenderLineConfig::default()),
+            )
+        });
+    }
+
+    fn cache_range(&self) -> Option<Range<usize>> {
+        Some(self.rlines.front()?.line_number..self.rlines.len())
+    }
+}
+
+trait RangeExt {
+    fn overlaps_left(&self, rhs: &Range<usize>) -> bool;
+    fn overlaps_right(&self, rhs: &Range<usize>) -> bool;
+    fn overlaps_left_only(&self, rhs: &Range<usize>) -> bool;
+    fn overlaps_right_only(&self, rhs: &Range<usize>) -> bool;
+    // fn contains_range(&self, rhs: &Range<usize>) -> bool;
+}
+
+impl RangeExt for Range<usize> {
+    fn overlaps_left(&self, rhs: &Range<usize>) -> bool {
+        !self.is_empty()
+            && !rhs.is_empty()
+            && self.start > rhs.start
+            && self.end > rhs.end
+    }
+
+    fn overlaps_right(&self, rhs: &Range<usize>) -> bool {
+        !self.is_empty()
+            && !rhs.is_empty()
+            && self.start < rhs.start
+            && self.end < rhs.end
+    }
+
+    fn overlaps_left_only(&self, rhs: &Range<usize>) -> bool {
+        self.overlaps_left(rhs) && !self.overlaps_right(rhs)
+    }
+
+    fn overlaps_right_only(&self, rhs: &Range<usize>) -> bool {
+        self.overlaps_right(rhs) && !self.overlaps_left(rhs)
+    }
+
+    // fn contains_range(&self, rhs: &Range<usize>) -> bool {
+    //     !self.is_empty() && !rhs.is_empty() && self.start <= rhs.start && self.end >= rhs.end
+    // }
+}

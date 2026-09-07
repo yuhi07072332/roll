@@ -57,33 +57,25 @@ impl Buffer {
         self.is_reading = false
     }
 
-    pub fn lines<'a>(&'a self, from: usize, take: usize) -> LinesIter<'a> {
-        LinesIter {
-            buf: self,
-            current_index: from,
-            end_index: from + take,
-        }
-    }
-
     pub fn lines_in<'a>(&'a self, range: Range<usize>) -> LinesIter<'a> {
         LinesIter {
             buf: self,
-            current_index: range.start,
-            end_index: range.end,
+            range: range.clone(),
+            curr: range.start,
+            curr_back: range.end - 1,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn lines_from<'a>(&'a self, from: usize) -> LinesIter<'a> {
-        LinesIter {
-            buf: self,
-            current_index: from,
-            end_index: self.line_count()
-        }
+    pub fn lines<'a>(&'a self, from: usize, take: usize) -> LinesIter<'a> {
+        self.lines_in(from..from + take)
     }
 
     pub fn line_count(&self) -> usize {
         self.line_starts.len().saturating_sub(1)
+    }
+
+    fn lines_from<'a>(&'a self, from: usize) -> LinesIter<'a> {
+        self.lines_in(from..self.line_count())
     }
 
     fn from_bytes(data: Vec<u8>) -> Buffer {
@@ -144,32 +136,35 @@ fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize) {
 /// similar to `BufRead::lines()`
 pub struct LinesIter<'a> {
     buf: &'a Buffer,
-    current_index: usize,
-    end_index: usize,
+    range: Range<usize>,
+    curr: usize,
+    curr_back: usize,
 }
 
 impl<'a> Iterator for LinesIter<'a> {
     type Item = Line<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_index >= self.end_index {
+        if self.curr >= self.range.end {
             return None;
         }
 
-        let line = (self.current_index, self.buf.line_at(self.current_index)?);
-        self.current_index += 1;
+        let line = (self.curr, self.buf.line_at(self.curr)?);
+        self.curr += 1;
         Some(line)
     }
 }
 
-pub struct RenderedLine {
-    data: Vec<u8>,
-    display_width: usize,
-}
+impl<'a> DoubleEndedIterator for LinesIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.curr < self.range.start {
+            return None;
+        }
 
-pub struct RenderCache {
-    rlines: Vec<RenderedLine>,
-    start_line: usize,
+        let line = (self.curr, self.buf.line_at(self.curr)?);
+        self.curr -= 1;
+        Some(line)
+    }
 }
 
 #[cfg(test)]
@@ -202,7 +197,6 @@ mod tests {
         assert_eq!(buf.line_at(2), Some(&b"third line"[..]));
         assert_eq!(buf.line_at(3), Some(&b"\r"[..]));
     }
-
 
     #[test]
     fn line_count_handles_empty_and_trailing_newline_input() {

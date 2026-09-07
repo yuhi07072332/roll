@@ -12,11 +12,9 @@ use crossterm::{
 const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
 
 use crate::{
-    InputBox, Mode, ScreenSize,
-    view::{
-        BufferView,
-        buffer::Buffer
-    }
+    InputBox, Mode,
+    terminal::ScreenSize,
+    view::{Buffer, View},
 };
 
 pub enum SourceName {
@@ -75,7 +73,7 @@ impl Renderer {
 
     pub fn resize_view(
         &self,
-        view: &mut BufferView,
+        view: &mut View,
         screen_size: ScreenSize,
         buffer: &Buffer,
     ) {
@@ -92,20 +90,14 @@ impl Renderer {
     pub fn draw_frame(
         &mut self,
         buffer: &Buffer,
-        view: &BufferView,
+        view: &View,
         mode: &Mode,
         size: ScreenSize,
     ) -> io::Result<()> {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
-        draw_view(
-            &mut self.frame_buf,
-            mode,
-            buffer,
-            view,
-            self.config.line_numbers,
-        )?;
+        draw_view(&mut self.frame_buf, buffer, view, self.config.line_numbers)?;
 
         match mode {
             Mode::Normal => {
@@ -183,26 +175,26 @@ fn truncate_right(text: &str, width: usize) -> &str {
 
 fn draw_view(
     frame_buf: &mut FrameBuf,
-    mode: &Mode,
     buffer: &Buffer,
-    view: &BufferView,
+    view: &View,
     show_line_numbers: bool,
 ) -> io::Result<()> {
     frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
-    for (line_number, line) in view.visible_lines(buffer) {
+    for rline in view.visible_lines() {
         if show_line_numbers {
             frame_buf.queue_cmd(PrintStyledContent(
                 format!(
                     "{:>width$} ",
-                    line_number + 1,
+                    rline.line_number + 1,
                     width = line_number_width(buffer),
                 )
                 .dim(),
             ))?;
         }
 
+        // TODO: 
         frame_buf
-            .queue(&line[..cmp::min(view.width(), line.len())])?
+            .queue(&rline.data.as_bytes())?
             .queue_cmd(cursor::MoveToNextLine(1))?;
     }
 
@@ -229,7 +221,7 @@ fn draw_input_box(
 fn draw_status_line(
     frame_buf: &mut FrameBuf,
     message: &str,
-    view: &BufferView,
+    view: &View,
     buffer: &Buffer,
     size: ScreenSize,
 ) -> io::Result<()> {

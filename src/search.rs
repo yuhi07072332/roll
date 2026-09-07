@@ -1,8 +1,11 @@
 use std::{
-    cmp, collections::BTreeMap, ops::{Bound, Range}, str::Utf8Error,
+    cmp,
+    collections::BTreeMap,
+    ops::{Bound, Range},
+    str::Utf8Error,
 };
 
-use crate::view::buffer::{Buffer, LinesIter};
+use crate::view::{Buffer, LinesIter};
 
 use regex::{Error as RegexError, Regex};
 
@@ -86,19 +89,18 @@ impl SearchState {
                 let end = line_number + MAX_LINES_PER_SEARCH;
                 (
                     line_number..end,
-                    (end > buffer.line_count()).then_some(
-                        0..end % buffer.line_count()
-                    )
-                )},
-            Backward => {
-                (
-                    line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1..line_number + 1,
-                    (MAX_LINES_PER_SEARCH > line_number).then_some(
-                        buffer.line_count().saturating_sub(MAX_LINES_PER_SEARCH)
-                        ..buffer.line_count()
-                    )
+                    (end > buffer.line_count())
+                        .then_some(0..end % buffer.line_count()),
                 )
             }
+            Backward => (
+                line_number.saturating_sub(MAX_LINES_PER_SEARCH) + 1
+                    ..line_number + 1,
+                (MAX_LINES_PER_SEARCH > line_number).then_some(
+                    buffer.line_count().saturating_sub(MAX_LINES_PER_SEARCH)
+                        ..buffer.line_count(),
+                ),
+            ),
         };
 
         self.search_in(range, buffer)?;
