@@ -60,9 +60,7 @@ impl Buffer {
     pub fn lines_in<'a>(&'a self, range: Range<usize>) -> LinesIter<'a> {
         LinesIter {
             buf: self,
-            range: range.clone(),
-            curr: range.start,
-            curr_back: range.end - 1,
+            range,
         }
     }
 
@@ -134,35 +132,37 @@ fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize) {
 }
 
 /// similar to `BufRead::lines()`
+#[derive(Debug)]
 pub struct LinesIter<'a> {
     buf: &'a Buffer,
     range: Range<usize>,
-    curr: usize,
-    curr_back: usize,
 }
 
 impl<'a> Iterator for LinesIter<'a> {
     type Item = Line<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.curr >= self.range.end {
+        if self.range.is_empty() {
             return None;
         }
 
-        let line = (self.curr, self.buf.line_at(self.curr)?);
-        self.curr += 1;
+        let curr = self.range.start;
+        let line = (curr, self.buf.line_at(curr)?);
+        self.range.start += 1;
         Some(line)
     }
 }
 
 impl<'a> DoubleEndedIterator for LinesIter<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.curr < self.range.start {
+        if self.range.is_empty() {
             return None;
         }
 
-        let line = (self.curr, self.buf.line_at(self.curr)?);
-        self.curr -= 1;
+        self.range.end -= 1;
+        let curr = self.range.end;
+        let line = (curr, self.buf.line_at(curr)?);
+
         Some(line)
     }
 }

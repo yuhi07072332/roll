@@ -6,7 +6,7 @@ pub use render::{ RenderedLine, RenderLineConfig };
 mod buffer;
 mod render;
 
-const RENDER_CACHE_CAPACITY: usize = 512;
+
 pub struct View {
     width: usize,
     height: usize,
@@ -125,9 +125,11 @@ struct RenderCache {
 }
 
 impl RenderCache {
+    const CAPACITY: usize = 512;
+
     pub fn new() -> RenderCache {
         RenderCache {
-            rlines: VecDeque::with_capacity(RENDER_CACHE_CAPACITY),
+            rlines: VecDeque::with_capacity(Self::CAPACITY),
         }
     }
 
@@ -138,101 +140,145 @@ impl RenderCache {
     }
 
     pub fn ensure_lines(&mut self, visible: Range<usize>, buffer: &Buffer) {
-        const HALF_CAPACITY: usize = RENDER_CACHE_CAPACITY / 2;
+        assert!(visible.end <= buffer.line_count());
 
-        let mut left_range = None;
-        let mut right_range = None;
-        if let Some(cache_range) = self.cache_range() {
-            left_range = visible
-                .overlaps_right_only(&cache_range)
-                .then_some(visible.start..cache_range.start);
-            right_range = visible
-                .overlaps_left_only(&cache_range)
-                .then_some(cache_range.end..visible.end);
+        let range = self.range().unwrap_or_default();
+        eprintln!("cache: {:?} ({} lines)", range.clone(), range.len());
+        if range.contains_range(&visible) {
+            return;
         }
+        eprint!("visible: {:?} -> ", visible.clone());
 
-        let mut left_remaining = 0;
-
-        if let Some(range) = left_range {
-            let start = range.start.saturating_sub(HALF_CAPACITY);
-            left_remaining = HALF_CAPACITY.saturating_sub(range.start);
-            self.add_front(start..range.end, buffer);
-        }
-
-        if let Some(range) = right_range {
-            let end = range.end + HALF_CAPACITY + left_remaining;
-            self.add_back(range.start..end, buffer);
-        }
-    }
-
-    fn add_front(&mut self, line_range: Range<usize>, buffer: &Buffer) {
-        self.add(line_range, buffer, VecDeque::push_front, VecDeque::pop_back)
-    }
-
-    fn add_back(&mut self, line_range: Range<usize>, buffer: &Buffer) {
-        self.add(line_range, buffer, VecDeque::push_back, VecDeque::pop_front)
-    }
-
-    fn add(
-        &mut self,
-        line_range: Range<usize>,
-        buffer: &Buffer,
-        push_fn: fn(&mut VecDeque<RenderedLine>, RenderedLine),
-        pop_fn: fn(&mut VecDeque<RenderedLine>) -> Option<RenderedLine>,
-    ) {
-        if line_range.is_empty() {
+        let new_range = desired_cache_range(visible, buffer.line_count());
+        if range.contains_range(&new_range) {
             return;
         }
 
-        while self.rlines.len() + line_range.len() > RENDER_CACHE_CAPACITY {
-            pop_fn(&mut self.rlines);
+        eprintln!("new_range: {:?} ({} lines)", new_range.clone(), new_range.len());
+
+        self.relocate(new_range, buffer);
+    }
+
+    fn relocate(&mut self, new_range: Range<usize>, buffer: &Buffer) {
+        // TODO: the case new_range > old_range
+        let old_range = self.range().unwrap_or_default();
+        if new_range.overlaps_right(&old_range) {
+            let push_range = new_range.start..old_range.start;
+            eprint!("add front: {:?}", push_range.clone());
+            self.add_front(push_range, buffer);
+        } else if new_range.overlaps_left(&old_range) {
+            let push_range = old_range.end..new_range.end;
+            eprint!("add back: {:?}", push_range.clone());
+            self.add_back(push_range, buffer);
+        } else {
+            self.rlines.clear();
+            eprint!("add from empty");
+            for line in buffer.lines_in(new_range) {
+                self.rlines.push_back(self.render_line(line));
+            }
         }
 
-        buffer.lines_in(line_range).rev().for_each(|(n, text)| {
-            push_fn(
-                &mut self.rlines,
-                RenderedLine::new(text, n, RenderLineConfig::default()),
-            )
-        });
+        eprintln!(" -> {:?}\n", self.range().unwrap_or_default());
     }
 
-    fn cache_range(&self) -> Option<Range<usize>> {
-        Some(self.rlines.front()?.line_number..self.rlines.len())
+    fn add_front(&mut self, range: Range<usize>, buffer: &Buffer) {
+        for _ in 0..range.len() {
+            self.rlines.pop_back();
+        }
+        for line in buffer.lines_in(range).rev() {
+            self.rlines.push_front(self.render_line(line));
+        }
     }
+
+    fn add_back(&mut self, range: Range<usize>, buffer: &Buffer) {
+        for _ in 0..range.len() {
+            self.rlines.pop_front();
+        }
+        for line in buffer.lines_in(range) {
+            self.rlines.push_back(self.render_line(line));
+        }
+    }
+
+    fn render_line(&self, (line_number, text): Line<'_>) -> RenderedLine {
+        RenderedLine::new(
+            text,
+            line_number,
+            RenderLineConfig {
+                tab_stop: 4,
+                ..Default::default()
+            }
+        )
+    }
+
+    fn range(&self) -> Option<Range<usize>> {
+        Some(self.rlines.front()?.line_number..self.rlines.back()?.line_number + 1)
+    }
+}
+
+fn desired_cache_range(
+    visible: Range<usize>,
+    buf_line_count: usize,
+) -> Range<usize> {
+    let start = cmp::min(
+        visible.end.saturating_sub(RenderCache::CAPACITY / 2),
+        visible.start,
+    );
+    let right_remaining = RenderCache::CAPACITY
+        .saturating_sub(visible.len())
+        .saturating_sub(visible.start - start);
+    let end = cmp::min(visible.end + right_remaining, buf_line_count);
+    let left_remaining = (visible.end + right_remaining).saturating_sub(buf_line_count);
+    start.saturating_sub(left_remaining)..end
 }
 
 trait RangeExt {
     fn overlaps_left(&self, rhs: &Range<usize>) -> bool;
     fn overlaps_right(&self, rhs: &Range<usize>) -> bool;
-    fn overlaps_left_only(&self, rhs: &Range<usize>) -> bool;
-    fn overlaps_right_only(&self, rhs: &Range<usize>) -> bool;
-    // fn contains_range(&self, rhs: &Range<usize>) -> bool;
+    fn contains_range(&self, rhs: &Range<usize>) -> bool;
 }
 
 impl RangeExt for Range<usize> {
     fn overlaps_left(&self, rhs: &Range<usize>) -> bool {
         !self.is_empty()
             && !rhs.is_empty()
-            && self.start > rhs.start
+            && self.start >= rhs.start
+            && self.start < rhs.end
             && self.end > rhs.end
     }
 
     fn overlaps_right(&self, rhs: &Range<usize>) -> bool {
         !self.is_empty()
             && !rhs.is_empty()
+            && self.end > rhs.start
+            && self.end <= rhs.end
             && self.start < rhs.start
-            && self.end < rhs.end
     }
 
-    fn overlaps_left_only(&self, rhs: &Range<usize>) -> bool {
-        self.overlaps_left(rhs) && !self.overlaps_right(rhs)
+    fn contains_range(&self, rhs: &Range<usize>) -> bool {
+        !self.is_empty() && !rhs.is_empty() && self.start <= rhs.start && self.end >= rhs.end
     }
+}
 
-    fn overlaps_right_only(&self, rhs: &Range<usize>) -> bool {
-        self.overlaps_right(rhs) && !self.overlaps_left(rhs)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CAPACITY: usize = RenderCache::CAPACITY;
+
+    #[test]
+    fn cache_range() {
+        //TODO: this test will not work if CAPACITY is not 512
+        assert_eq!(desired_cache_range(0..60, 1024), 0..CAPACITY);
+        assert_eq!(desired_cache_range(0..60, 400), 0..400);
+        assert_eq!(desired_cache_range(100..700, 1024), 100..700);
+
+        let r = desired_cache_range(462..572, 1024);
+        assert_eq!(r, 828 - CAPACITY..828);
+
+        let r = desired_cache_range(462..572, 700);
+        assert_eq!(r, 700 - CAPACITY..700);
+
+        let r = desired_cache_range(690..700, 700);
+        assert_eq!(r, 700 - CAPACITY..700);
     }
-
-    // fn contains_range(&self, rhs: &Range<usize>) -> bool {
-    //     !self.is_empty() && !rhs.is_empty() && self.start <= rhs.start && self.end >= rhs.end
-    // }
 }

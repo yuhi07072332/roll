@@ -42,31 +42,37 @@ impl Key {
                 KeyModifiers::CONTROL => Key::CtrlChar(c),
                 _ => Key::Unknown,
             },
-            code => match modifiers {
-                KeyModifiers::NONE => Key::Sp(SpecialKey::new(code)),
-                KeyModifiers::CONTROL => Key::Ctrl(SpecialKey::new(code)),
-                KeyModifiers::SHIFT => Key::Shift(SpecialKey::new(code)),
-                _ => Key::Unknown,
+            code => {
+                let Some(sp) = SpecialKey::new(code) else {
+                    return Key::Unknown;
+                };
+
+                match modifiers {
+                    KeyModifiers::NONE => Key::Sp(sp),
+                    KeyModifiers::CONTROL => Key::Ctrl(sp),
+                    KeyModifiers::SHIFT => Key::Shift(sp),
+                    _ => Key::Unknown,
+                }
             },
         }
     }
 }
 
 impl SpecialKey {
-    fn new(code: KeyCode) -> SpecialKey {
+    fn new(code: KeyCode) -> Option<SpecialKey> {
         match code {
-            KeyCode::Esc => SpecialKey::Esc,
-            KeyCode::Enter => SpecialKey::Enter,
-            KeyCode::Backspace => SpecialKey::Backspace,
-            KeyCode::Up => SpecialKey::Up,
-            KeyCode::Down => SpecialKey::Down,
-            KeyCode::Left => SpecialKey::Left,
-            KeyCode::Right => SpecialKey::Right,
-            KeyCode::PageUp => SpecialKey::PageUp,
-            KeyCode::PageDown => SpecialKey::PageDown,
-            KeyCode::Home => SpecialKey::Home,
-            KeyCode::End => SpecialKey::End,
-            _ => panic!("SpecialKey::new()"),
+            KeyCode::Esc => Some(SpecialKey::Esc),
+            KeyCode::Enter => Some(SpecialKey::Enter),
+            KeyCode::Backspace => Some(SpecialKey::Backspace),
+            KeyCode::Up => Some(SpecialKey::Up),
+            KeyCode::Down => Some(SpecialKey::Down),
+            KeyCode::Left => Some(SpecialKey::Left),
+            KeyCode::Right => Some(SpecialKey::Right),
+            KeyCode::PageUp => Some(SpecialKey::PageUp),
+            KeyCode::PageDown => Some(SpecialKey::PageDown),
+            KeyCode::Home => Some(SpecialKey::Home),
+            KeyCode::End => Some(SpecialKey::End),
+            _ => None
         }
     }
 }

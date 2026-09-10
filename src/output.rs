@@ -194,7 +194,7 @@ fn draw_view(
 
         // TODO: 
         frame_buf
-            .queue(&rline.data.as_bytes())?
+            .queue(rline.data.as_bytes())?
             .queue_cmd(cursor::MoveToNextLine(1))?;
     }
 

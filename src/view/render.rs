@@ -16,6 +16,7 @@ impl Default for RenderLineConfig<'_> {
         }
     }
 }
+#[derive(Debug)]
 pub struct RenderedLine {
     pub data: String,
     pub line_number: usize,
