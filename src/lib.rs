@@ -1,12 +1,12 @@
 use std::{
     io::{self, Read, Write},
+    ops::Range,
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
     thread,
-    ops::Range
 };
 
-use anyhow::{ bail, Context };
+use anyhow::{Context, bail};
 
 use clap::Parser;
 
@@ -17,10 +17,12 @@ use crossterm::{
 };
 
 use input::{Key, SpecialKey::*};
-use output::{RenderConfig, Renderer, SourceName, LineWrap};
+use output::{LineWrap, RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
-use view::{BYTES_PER_READ, Buffer, View, RenderedLine, RenderLineConfig, Line};
+use view::{
+    BYTES_PER_READ, Buffer, Line, RenderLineConfig, RenderedLine, View,
+};
 
 use crate::log::debug;
 
@@ -129,7 +131,8 @@ pub fn run() -> anyhow::Result<()> {
     let buffer = if let Some(file_path) = &args.file_path {
         let file_path_str = file_path.to_str().unwrap_or("(unknown)");
         source_name = SourceName::FileName(String::from(file_path_str));
-        Buffer::from_file(file_path).context(format!("failed to read file: {}", file_path_str))?
+        Buffer::from_file(file_path)
+            .context(format!("failed to read file: {}", file_path_str))?
     } else {
         if io::stdin().is_tty() {
             bail!("missing file or piped stdin");
@@ -142,14 +145,18 @@ pub fn run() -> anyhow::Result<()> {
 
     thread::spawn(move || send_from_terminal_event(tx));
 
-    let wrap = if args.hard_wrap { LineWrap::HardWrap } 
-        else if args.soft_wrap { LineWrap::SoftWrap}
-        else { LineWrap::Disabled };
+    let wrap = if args.hard_wrap {
+        LineWrap::HardWrap
+    } else if args.soft_wrap {
+        LineWrap::SoftWrap
+    } else {
+        LineWrap::Disabled
+    };
 
     let render_config = output::RenderConfig {
         line_numbers: args.line_numbers,
         source_name,
-        wrap
+        wrap,
     };
 
     let pager = Pager {
@@ -157,9 +164,7 @@ pub fn run() -> anyhow::Result<()> {
         view: View::new(),
         screen_size: terminal::size()?,
         search_state: None,
-        rl_config: RenderLineConfig {
-            tab_stop: 4
-        }
+        rl_config: RenderLineConfig { tab_stop: 4 },
     };
 
     run_loop(&args, render_config, pager, rx)?;
@@ -180,7 +185,9 @@ fn run_loop(
     let mut quit: bool = false;
     while !quit {
         renderer.resize_view(&mut pager);
-        pager.view.ensure_visible_lines(&pager.buffer, &pager.rl_config);
+        pager
+            .view
+            .ensure_visible_lines(&pager.buffer, &pager.rl_config);
         renderer.draw_frame(&pager, &mode)?;
 
         match receiver.recv()? {
@@ -211,7 +218,6 @@ fn run_loop(
 
     Ok(())
 }
-
 
 fn send_from_stdin(tx: Sender<Event>) -> anyhow::Result<()> {
     let mut stdin = io::stdin().lock();

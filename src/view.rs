@@ -50,8 +50,8 @@ impl View {
 
     pub fn ensure_visible_lines(
         &mut self,
-        buffer: & Buffer,
-        rl_config: &RenderLineConfig
+        buffer: &Buffer,
+        rl_config: &RenderLineConfig,
     ) {
         if self.line_offset < buffer.line_count() {
             self.render_cache.ensure_lines(
@@ -61,7 +61,7 @@ impl View {
                         buffer.line_count(),
                     ),
                 buffer,
-                rl_config
+                rl_config,
             );
         }
     }
@@ -115,9 +115,7 @@ impl View {
     }
 
     fn clamp_line_offset(&mut self, buffer: &Buffer) {
-        let visible_max_offset =
-            buffer.line_count().saturating_sub(self.height);
-        self.line_offset = cmp::min(self.line_offset, visible_max_offset);
+        self.line_offset = cmp::min(self.line_offset, buffer.line_count() - 1);
     }
 
     fn clamp_col_offset(&self) -> usize {
@@ -157,8 +155,8 @@ impl RenderCache {
     pub fn ensure_lines(
         &mut self,
         visible: Range<usize>,
-        buffer: & Buffer,
-        rl_config: &RenderLineConfig
+        buffer: &Buffer,
+        rl_config: &RenderLineConfig,
     ) {
         assert!(visible.end <= buffer.line_count());
 
@@ -178,8 +176,8 @@ impl RenderCache {
     fn relocate(
         &mut self,
         new_range: Range<usize>,
-        buffer: & Buffer,
-        rl_config: &RenderLineConfig
+        buffer: &Buffer,
+        rl_config: &RenderLineConfig,
     ) {
         let old_range = self.range().unwrap_or_default();
         let size_diff = new_range.len().saturating_sub(old_range.len());
@@ -214,7 +212,12 @@ impl RenderCache {
     }
 
     /// push lines to front and pop `pop_n` lines from back
-    fn add_front<'a>(&mut self, lines: LinesIter<'a>, pop_n: usize, rl_config: &RenderLineConfig) {
+    fn add_front<'a>(
+        &mut self,
+        lines: LinesIter<'a>,
+        pop_n: usize,
+        rl_config: &RenderLineConfig,
+    ) {
         for _ in 0..pop_n {
             self.rlines.pop_back();
         }
@@ -224,7 +227,12 @@ impl RenderCache {
     }
 
     /// push lines to back and pop `pop_n` lines from front
-    fn add_back<'a>(&mut self, lines: LinesIter<'a>, pop_n: usize, rl_config: &RenderLineConfig) {
+    fn add_back<'a>(
+        &mut self,
+        lines: LinesIter<'a>,
+        pop_n: usize,
+        rl_config: &RenderLineConfig,
+    ) {
         for _ in 0..pop_n {
             self.rlines.pop_front();
         }
@@ -233,7 +241,11 @@ impl RenderCache {
         }
     }
 
-    fn render_line(&self, (line_number, text): Line<'_>, rl_config: &RenderLineConfig) -> RenderedLine {
+    fn render_line(
+        &self,
+        (line_number, text): Line<'_>,
+        rl_config: &RenderLineConfig,
+    ) -> RenderedLine {
         RenderedLine::new(text, line_number, rl_config)
     }
 

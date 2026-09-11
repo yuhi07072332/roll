@@ -9,9 +9,7 @@ pub struct RenderLineConfig {
 
 impl Default for RenderLineConfig {
     fn default() -> Self {
-        RenderLineConfig {
-            tab_stop: 4,
-        }
+        RenderLineConfig { tab_stop: 4 }
     }
 }
 #[derive(Debug)]
@@ -43,15 +41,15 @@ impl RenderedLine {
             }
         };
 
-        RenderedLine {
-            data,
-            line_number,
-        }
+        RenderedLine { data, line_number }
     }
-
 }
 
-pub fn raw_index(rendered_byte_index: usize, raw: &[u8], rl_config: &RenderLineConfig) -> usize {
+pub fn raw_index(
+    rendered_byte_index: usize,
+    raw: &[u8],
+    rl_config: &RenderLineConfig,
+) -> usize {
     let tab_stop = rl_config.tab_stop;
     let mut rx = 0;
     for (i, c) in raw.iter().enumerate() {
@@ -59,7 +57,7 @@ pub fn raw_index(rendered_byte_index: usize, raw: &[u8], rl_config: &RenderLineC
             b'\t' => {
                 rx += tab_stop - (rx % tab_stop);
             }
-            _ => rx += 1
+            _ => rx += 1,
         }
         if rx > rendered_byte_index {
             return i;
@@ -69,12 +67,9 @@ pub fn raw_index(rendered_byte_index: usize, raw: &[u8], rl_config: &RenderLineC
     raw.len()
 }
 
-
 #[allow(clippy::same_item_push)]
 fn render_raw_line(line: &[u8], config: &RenderLineConfig) -> Vec<u8> {
-    let RenderLineConfig {
-        tab_stop,
-    } = config;
+    let RenderLineConfig { tab_stop } = config;
 
     let mut rendered: Vec<u8> = Vec::with_capacity(line.len());
 
@@ -97,16 +92,13 @@ fn render_raw_line(line: &[u8], config: &RenderLineConfig) -> Vec<u8> {
     rendered
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn render_tab_to_space() {
-        let config = RenderLineConfig {
-            tab_stop: 4,
-        };
+        let config = RenderLineConfig { tab_stop: 4 };
 
         let s1 = b"\t";
         let s2 = b" \t";
@@ -117,21 +109,14 @@ mod tests {
         assert_eq!(render_raw_line(s2, &config), b"    ");
         assert_eq!(render_raw_line(s3, &config), b"    ");
         assert_eq!(render_raw_line(s4, &config), b"    ");
-        assert_eq!(
-            render_raw_line(s5, &config),
-            b"        std::cout   << 42"
-        );
+        assert_eq!(render_raw_line(s5, &config), b"        std::cout   << 42");
     }
 
     #[test]
     fn raw_index_computes_rx_to_cx() {
         let raw = b"hello\tworld";
-        let rl_config = RenderLineConfig { tab_stop: 4};
-        let rline = RenderedLine::new(
-            raw,
-            1,
-            &rl_config
-        );
+        let rl_config = RenderLineConfig { tab_stop: 4 };
+        let rline = RenderedLine::new(raw, 1, &rl_config);
 
         assert_eq!(rline.data, "hello   world".to_string());
         assert_eq!(raw_index(3, raw, &rl_config), 3);

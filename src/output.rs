@@ -1,5 +1,6 @@
 use std::{
-    cmp, io::{self, Stdout, Write}, ops::Range, thread::current
+    cmp,
+    io::{self, Stdout, Write},
 };
 
 use crossterm::{
@@ -14,8 +15,9 @@ use unicode_width::UnicodeWidthStr;
 const FRAME_BUFFER_INIT_CAPACITY: usize = 1024;
 
 use crate::{
-    InputBox, Mode, Pager,terminal::ScreenSize, 
-    view::{Buffer, RenderLineConfig, RenderedLine, render::raw_index},
+    InputBox, Mode, Pager,
+    terminal::ScreenSize,
+    view::{Buffer, RenderedLine, render::raw_index},
 };
 
 pub enum SourceName {
@@ -32,7 +34,7 @@ pub enum LineWrap {
 pub struct RenderConfig {
     pub source_name: SourceName,
     pub line_numbers: bool,
-    pub wrap: LineWrap
+    pub wrap: LineWrap,
 }
 
 pub struct Renderer {
@@ -69,11 +71,7 @@ impl Renderer {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
-        draw_view(
-            &mut self.frame_buf,
-            pager,
-            &self.config
-        )?;
+        draw_view(&mut self.frame_buf, pager, &self.config)?;
 
         match mode {
             Mode::Normal if let Some(state) = pager.search_state.as_ref() => {
@@ -148,12 +146,13 @@ fn draw_view(
 ) -> io::Result<()> {
     frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
     let mut y = 0;
+    let line_number_width = line_number_width(&pager.buffer);
+
     for rline in pager.view.visible_lines() {
         if y as usize > pager.view.height() {
             break;
         }
 
-        let line_number_width = line_number_width(&pager.buffer);
         if config.line_numbers {
             frame_buf.queue_cmd(PrintStyledContent(
                 format!(
@@ -168,6 +167,13 @@ fn draw_view(
         y += draw_line(frame_buf, rline, pager, config, line_number_width + 1)?;
     }
 
+    while (y as usize) < pager.view.height() {
+        frame_buf
+            .queue_cmd(PrintStyledContent("~".dim()))?
+            .queue_cmd(cursor::MoveToNextLine(1))?;
+        y += 1;
+    }
+
     Ok(())
 }
 
@@ -176,7 +182,7 @@ fn draw_line(
     rline: &RenderedLine,
     pager: &Pager,
     config: &RenderConfig,
-    line_begin_col: u16
+    line_begin_col: u16,
 ) -> io::Result<u32> {
     let Some(raw) = pager.buffer.line_at(rline.line_number) else {
         return Ok(0);
@@ -193,6 +199,7 @@ fn draw_line(
     let mut hl_index = 0;
     let mut line_height: u32 = 1;
     let mut current_line_width = 0;
+    let mut is_highlighting = false;
     for (rx, gr) in rline.data.grapheme_indices(true) {
         let gr_width = gr.width();
         current_line_width += gr_width;
@@ -206,8 +213,8 @@ fn draw_line(
                     line_height += 1;
                     current_line_width = gr_width;
                 }
-                // TODO: 
-                LineWrap::SoftWrap => ()
+                // TODO:
+                LineWrap::SoftWrap => (),
             }
         }
 
@@ -215,8 +222,10 @@ fn draw_line(
         if let Some(hl) = highlights.get(hl_index) {
             if hl.start == raw_index {
                 frame_buf.queue(b"\x1b[7m")?;
+                is_highlighting = true;
             } else if raw_index == hl.end {
                 frame_buf.queue(b"\x1b[m")?;
+                is_highlighting = false;
                 hl_index += 1;
             }
         }
@@ -224,6 +233,9 @@ fn draw_line(
         frame_buf.queue(gr.as_bytes())?;
     }
 
+    if is_highlighting {
+        frame_buf.queue(b"\x1b[m")?;
+    }
     frame_buf.queue_cmd(cursor::MoveToNextLine(1))?;
 
     Ok(line_height)
