@@ -1,6 +1,5 @@
 use std::{
-    cmp,
-    io::{self, Stdout, Write},
+    cmp, io::{self, Stdout, Write}, ops::Range, thread::current
 };
 
 use crossterm::{
@@ -9,12 +8,14 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
 const FRAME_BUFFER_INIT_CAPACITY: usize = 1024;
 
 use crate::{
-    InputBox, Mode, Pager,
-    terminal::ScreenSize,
-    view::{Buffer, View},
+    InputBox, Mode, Pager,terminal::ScreenSize, 
+    view::{Buffer, RenderLineConfig, RenderedLine, render::raw_index},
 };
 
 pub enum SourceName {
@@ -22,9 +23,16 @@ pub enum SourceName {
     Stdin,
 }
 
+pub enum LineWrap {
+    Disabled,
+    HardWrap,
+    SoftWrap,
+}
+
 pub struct RenderConfig {
-    pub line_numbers: bool,
     pub source_name: SourceName,
+    pub line_numbers: bool,
+    pub wrap: LineWrap
 }
 
 pub struct Renderer {
@@ -49,7 +57,7 @@ impl Renderer {
         let ScreenSize { width, height } = pager.screen_size;
         let width = if self.config.line_numbers {
             (width as usize)
-                .saturating_sub(line_number_width(&pager.buffer) + 1)
+                .saturating_sub(line_number_width(&pager.buffer) as usize + 1)
         } else {
             width as usize
         };
@@ -63,12 +71,16 @@ impl Renderer {
         self.clear_screen()?;
         draw_view(
             &mut self.frame_buf,
-            &pager.buffer,
-            &pager.view,
-            self.config.line_numbers,
+            pager,
+            &self.config
         )?;
 
         match mode {
+            Mode::Normal if let Some(state) = pager.search_state.as_ref() => {
+                let message = format!("search: \'{}\'", state.pattern());
+                draw_status_line(&mut self.frame_buf, &message, pager)?;
+                self.hide_cursor()?
+            }
             Mode::Normal => {
                 let source_name = match &self.config.source_name {
                     SourceName::FileName(filename) => filename,
@@ -87,11 +99,6 @@ impl Renderer {
                     pager.screen_size,
                 )?;
                 self.show_cursor()?
-            }
-            Mode::Search(state) => {
-                let message = format!("search: \'{}\'", state.pattern());
-                draw_status_line(&mut self.frame_buf, &message, pager)?;
-                self.hide_cursor()?
             }
         }
 
@@ -119,8 +126,8 @@ impl Renderer {
     }
 }
 
-fn line_number_width(buffer: &Buffer) -> usize {
-    (buffer.line_count().checked_ilog10().unwrap_or(0) + 1) as usize
+fn line_number_width(buffer: &Buffer) -> u16 {
+    (buffer.line_count().checked_ilog10().unwrap_or(0) + 1) as u16
 }
 
 fn truncate_left(text: &str, width: usize) -> &str {
@@ -136,30 +143,90 @@ fn truncate_right(text: &str, width: usize) -> &str {
 
 fn draw_view(
     frame_buf: &mut FrameBuf,
-    buffer: &Buffer,
-    view: &View,
-    show_line_numbers: bool,
+    pager: &Pager,
+    config: &RenderConfig,
 ) -> io::Result<()> {
     frame_buf.queue_cmd(cursor::MoveTo(0, 0))?;
-    for rline in view.visible_lines() {
-        if show_line_numbers {
+    let mut y = 0;
+    for rline in pager.view.visible_lines() {
+        if y as usize > pager.view.height() {
+            break;
+        }
+
+        let line_number_width = line_number_width(&pager.buffer);
+        if config.line_numbers {
             frame_buf.queue_cmd(PrintStyledContent(
                 format!(
                     "{:>width$} ",
                     rline.line_number + 1,
-                    width = line_number_width(buffer),
+                    width = line_number_width as usize
                 )
                 .dim(),
             ))?;
         }
 
-        // TODO:
-        frame_buf
-            .queue(rline.data.as_bytes())?
-            .queue_cmd(cursor::MoveToNextLine(1))?;
+        y += draw_line(frame_buf, rline, pager, config, line_number_width + 1)?;
     }
 
     Ok(())
+}
+
+fn draw_line(
+    frame_buf: &mut FrameBuf,
+    rline: &RenderedLine,
+    pager: &Pager,
+    config: &RenderConfig,
+    line_begin_col: u16
+) -> io::Result<u32> {
+    let Some(raw) = pager.buffer.line_at(rline.line_number) else {
+        return Ok(0);
+    };
+    let highlights = if let Some(search_state) = &pager.search_state {
+        search_state
+            .match_at(rline.line_number)
+            .map(|v| v.as_slice())
+            .unwrap_or_default()
+    } else {
+        &[]
+    };
+
+    let mut hl_index = 0;
+    let mut line_height: u32 = 1;
+    let mut current_line_width = 0;
+    for (rx, gr) in rline.data.grapheme_indices(true) {
+        let gr_width = gr.width();
+        current_line_width += gr_width;
+        if current_line_width > pager.view.width() {
+            match config.wrap {
+                LineWrap::Disabled => break,
+                LineWrap::HardWrap => {
+                    frame_buf
+                        .queue_cmd(cursor::MoveToNextLine(1))?
+                        .queue_cmd(cursor::MoveToColumn(line_begin_col))?;
+                    line_height += 1;
+                    current_line_width = gr_width;
+                }
+                // TODO: 
+                LineWrap::SoftWrap => ()
+            }
+        }
+
+        let raw_index = raw_index(rx, raw, &pager.rl_config);
+        if let Some(hl) = highlights.get(hl_index) {
+            if hl.start == raw_index {
+                frame_buf.queue(b"\x1b[7m")?;
+            } else if raw_index == hl.end {
+                frame_buf.queue(b"\x1b[m")?;
+                hl_index += 1;
+            }
+        }
+
+        frame_buf.queue(gr.as_bytes())?;
+    }
+
+    frame_buf.queue_cmd(cursor::MoveToNextLine(1))?;
+
+    Ok(line_height)
 }
 
 fn draw_input_box(
