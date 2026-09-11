@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use anyhow::bail;
+use anyhow::{ bail, Context };
 
 use clap::Parser;
 
@@ -128,10 +128,9 @@ pub fn run() -> anyhow::Result<()> {
     let source_name;
 
     let buffer = if let Some(file_path) = &args.file_path {
-        source_name = SourceName::FileName(String::from(
-            file_path.to_str().unwrap_or("(unknown)"),
-        ));
-        Buffer::from_file(file_path)?
+        let file_path_str = file_path.to_str().unwrap_or("(unknown)");
+        source_name = SourceName::FileName(String::from(file_path_str));
+        Buffer::from_file(file_path).context(format!("failed to read file: {}", file_path_str))?
     } else {
         if io::stdin().is_tty() {
             bail!("missing file or piped stdin");

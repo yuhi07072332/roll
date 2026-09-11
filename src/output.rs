@@ -9,7 +9,7 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 
-const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
+const FRAME_BUFFER_INIT_CAPACITY: usize = 1024;
 
 use crate::{
     InputBox, Mode, Pager,
