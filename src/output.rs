@@ -129,6 +129,7 @@ fn line_number_width(buffer: &Buffer) -> u16 {
 }
 
 fn truncate_left(text: &str, width: usize) -> &str {
+    //TODO: use chars instead of bytes
     &text[cmp::min(
         text.len().saturating_sub(width),
         text.len().saturating_sub(1),

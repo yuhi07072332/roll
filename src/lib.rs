@@ -1,6 +1,5 @@
 use std::{
     io::{self, Read, Write},
-    ops::Range,
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -21,10 +20,8 @@ use output::{LineWrap, RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
 use view::{
-    BYTES_PER_READ, Buffer, Line, RenderLineConfig, RenderedLine, View,
+    BYTES_PER_READ, Buffer, RenderLineConfig, View,
 };
-
-use crate::log::debug;
 
 pub mod log;
 
@@ -122,7 +119,7 @@ fn print_buffer(buffer: &Buffer) -> io::Result<()> {
 }
 
 pub fn run() -> anyhow::Result<()> {
-    let args = Args::try_parse()?;
+    let args = Args::parse();
 
     let (tx, rx) = mpsc::channel::<Event>();
 
