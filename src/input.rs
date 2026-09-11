@@ -53,7 +53,7 @@ impl Key {
                     KeyModifiers::SHIFT => Key::Shift(sp),
                     _ => Key::Unknown,
                 }
-            },
+            }
         }
     }
 }
@@ -72,7 +72,7 @@ impl SpecialKey {
             KeyCode::PageDown => Some(SpecialKey::PageDown),
             KeyCode::Home => Some(SpecialKey::Home),
             KeyCode::End => Some(SpecialKey::End),
-            _ => None
+            _ => None,
         }
     }
 }

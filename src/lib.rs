@@ -21,6 +21,8 @@ use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
 use view::{BYTES_PER_READ, Buffer, View};
 
+pub mod log;
+
 mod input;
 mod output;
 mod search;
@@ -57,12 +59,12 @@ impl Mode {
     fn is_normal(&self) -> bool {
         matches!(self, Mode::Normal)
     }
-    fn is_input(&self) -> bool {
-        matches!(self, Mode::Input(_))
-    }
-    fn is_search(&self) -> bool {
-        matches!(self, Mode::Search(_))
-    }
+    // fn is_input(&self) -> bool {
+    //     matches!(self, Mode::Input(_))
+    // }
+    // fn is_search(&self) -> bool {
+    //     matches!(self, Mode::Search(_))
+    // }
 }
 
 enum InputAction {
@@ -97,6 +99,12 @@ impl InputBox {
             action: self.action,
         }
     }
+}
+
+struct Pager {
+    buffer: Buffer,
+    view: View,
+    screen_size: ScreenSize,
 }
 
 pub fn print_error(message: impl std::fmt::Display) {
@@ -148,43 +156,45 @@ pub fn run() -> anyhow::Result<()> {
 
 fn run_loop(
     args: &Args,
-    mut buffer: Buffer,
+    buffer: Buffer,
     render_config: RenderConfig,
     receiver: Receiver<Event>,
 ) -> anyhow::Result<()> {
     let terminal = TerminalGuard::init()?;
-    let mut view = View::new();
     let mut renderer = Renderer::new(render_config);
-    let mut screen_size = terminal::size()?;
     let mut mode = Mode::Normal;
 
-    let mut needs_exit: bool = false;
-    while !needs_exit {
-        renderer.resize_view(&mut view, screen_size, &buffer);
-        view.ensure_visible_lines(&buffer);
-        renderer.draw_frame(&buffer, &view, &mode, screen_size)?;
+    let mut pager = Pager {
+        buffer,
+        view: View::new(),
+        screen_size: terminal::size()?,
+    };
+
+    let mut quit: bool = false;
+    while !quit {
+        renderer.resize_view(&mut pager);
+        pager.view.ensure_visible_lines(&pager.buffer);
+        renderer.draw_frame(&pager, &mode)?;
 
         match receiver.recv()? {
             Event::BufferRead { n, bytes } => {
-                buffer.on_buffer_read(n, bytes);
+                pager.buffer.on_buffer_read(n, bytes);
             }
             Event::Terminal(TermEvent::Resize(width, height)) => {
-                screen_size = ScreenSize { width, height };
+                pager.screen_size = ScreenSize { width, height };
             }
             Event::Terminal(e @ TermEvent::Key(_))
             | Event::Terminal(e @ TermEvent::Mouse(_)) => {
-                mode = handle_input(e, mode, &buffer, &mut view, || {
-                    needs_exit = true
-                })?;
+                mode = handle_input(e, &mut pager, mode, || quit = true)?;
             }
             Event::BufferEof => {
-                buffer.on_buffer_eof();
+                pager.buffer.on_buffer_eof();
 
                 if args.quit_if_one_screen
-                    && buffer.line_count() < view.height()
+                    && pager.buffer.line_count() < pager.view.height()
                 {
                     drop(terminal);
-                    print_buffer(&buffer)?;
+                    print_buffer(&pager.buffer)?;
                     return Ok(());
                 }
             }
@@ -223,29 +233,26 @@ fn send_from_terminal_event(tx: Sender<Event>) -> anyhow::Result<()> {
 
 fn handle_input(
     event: TermEvent,
+    pager: &mut Pager,
     mode: Mode,
-    buffer: &Buffer,
-    view: &mut View,
     on_exit: impl FnOnce(),
 ) -> anyhow::Result<Mode> {
     match mode {
-        Mode::Normal => {
-            Ok(handle_normal_input(mode, &event, buffer, view, on_exit))
-        }
+        Mode::Normal => Ok(handle_normal_input(&event, pager, mode, on_exit)),
         Mode::Input(input_box) => {
             match handle_inputbox_input(event, input_box) {
                 InputResult::Continue(input_box) => Ok(Mode::Input(input_box)),
                 InputResult::Cancel => Ok(Mode::Normal),
                 InputResult::Submit { input, action } => {
-                    let result = on_input_submit(input, action, buffer, view)?;
+                    let result = on_input_submit(input, action, pager)?;
                     Ok(result)
                 }
             }
         }
         Mode::Search(_) => {
-            let mode = handle_normal_input(mode, &event, buffer, view, on_exit);
+            let mode = handle_normal_input(&event, pager, mode, on_exit);
             if let Mode::Search(search_state) = mode {
-                Ok(handle_search_input(event, search_state, buffer, view))
+                Ok(handle_search_input(event, search_state, pager))
             } else {
                 Ok(mode)
             }
@@ -256,17 +263,16 @@ fn handle_input(
 fn on_input_submit(
     input: String,
     action: InputAction,
-    buffer: &Buffer,
-    view: &mut View,
+    pager: &mut Pager,
 ) -> anyhow::Result<Mode> {
     match action {
         InputAction::Search(direction) => {
             let mut state = SearchState::new(input, direction)?;
-            state.search_from(view.line_offset(), buffer)?;
+            state.search_from(pager.view.line_offset(), &pager.buffer)?;
             if let Some((n, _)) =
-                state.next_match_from(view.line_offset(), buffer)
+                state.next_match_from(pager.view.line_offset(), &pager.buffer)
             {
-                view.set_line_offset(*n, buffer);
+                pager.view.set_line_offset(*n, &pager.buffer);
             }
             Ok(Mode::Search(state))
         }
@@ -274,12 +280,13 @@ fn on_input_submit(
 }
 
 fn handle_normal_input(
-    mode: Mode,
     event: &TermEvent,
-    buffer: &Buffer,
-    view: &mut View,
+    pager: &mut Pager,
+    mode: Mode,
     on_exit: impl FnOnce(),
 ) -> Mode {
+    let Pager { buffer, view, .. } = pager;
+
     let half_page = view.height() as isize / 2;
 
     match *event {
@@ -373,9 +380,9 @@ fn handle_inputbox_input(
 fn handle_search_input(
     event: TermEvent,
     mut state: SearchState,
-    buffer: &Buffer,
-    view: &mut View,
+    pager: &mut Pager,
 ) -> Mode {
+    let Pager { view, buffer, .. } = pager;
     let TermEvent::Key(key) = event else {
         return Mode::Search(state);
     };

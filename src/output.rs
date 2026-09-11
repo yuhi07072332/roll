@@ -12,7 +12,7 @@ use crossterm::{
 const FRAME_BUFFER_INIT_CAPACITY: usize = 500;
 
 use crate::{
-    InputBox, Mode,
+    InputBox, Mode, Pager,
     terminal::ScreenSize,
     view::{Buffer, View},
 };
@@ -27,32 +27,6 @@ pub struct RenderConfig {
     pub source_name: SourceName,
 }
 
-struct FrameBuf(Vec<u8>);
-
-impl FrameBuf {
-    fn new() -> FrameBuf {
-        FrameBuf(Vec::with_capacity(FRAME_BUFFER_INIT_CAPACITY))
-    }
-
-    fn get_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.0
-    }
-
-    fn queue(&mut self, buf: &[u8]) -> io::Result<&mut Self> {
-        self.0.write_all(buf)?;
-        Ok(self)
-    }
-
-    fn queue_cmd(&mut self, command: impl Command) -> io::Result<&mut Self> {
-        self.0.queue(command)?;
-        Ok(self)
-    }
-
-    fn flush(&mut self, stdout: &mut Stdout) -> io::Result<()> {
-        stdout.write_all(&self.0)?;
-        stdout.flush()
-    }
-}
 pub struct Renderer {
     stdout: Stdout,
     config: RenderConfig,
@@ -71,65 +45,52 @@ impl Renderer {
         }
     }
 
-    pub fn resize_view(
-        &self,
-        view: &mut View,
-        screen_size: ScreenSize,
-        buffer: &Buffer,
-    ) {
-        let ScreenSize { width, height } = screen_size;
+    pub fn resize_view(&self, pager: &mut Pager) {
+        let ScreenSize { width, height } = pager.screen_size;
         let width = if self.config.line_numbers {
-            (width as usize).saturating_sub(line_number_width(buffer) + 1)
+            (width as usize)
+                .saturating_sub(line_number_width(&pager.buffer) + 1)
         } else {
             width as usize
         };
         let height = (height as usize).saturating_sub(1);
-        view.set_size(width, height, buffer);
+        pager.view.set_size(width, height, &pager.buffer);
     }
 
-    pub fn draw_frame(
-        &mut self,
-        buffer: &Buffer,
-        view: &View,
-        mode: &Mode,
-        size: ScreenSize,
-    ) -> io::Result<()> {
+    pub fn draw_frame(&mut self, pager: &Pager, mode: &Mode) -> io::Result<()> {
         self.frame_buf.get_mut().clear();
 
         self.clear_screen()?;
-        draw_view(&mut self.frame_buf, buffer, view, self.config.line_numbers)?;
+        draw_view(
+            &mut self.frame_buf,
+            &pager.buffer,
+            &pager.view,
+            self.config.line_numbers,
+        )?;
 
         match mode {
             Mode::Normal => {
                 let source_name = match &self.config.source_name {
                     SourceName::FileName(filename) => filename,
-                    SourceName::Stdin if buffer.is_reading() => {
+                    SourceName::Stdin if pager.buffer.is_reading() => {
                         "(stdin: reading)"
                     }
                     SourceName::Stdin => "(stdin)",
                 };
-                draw_status_line(
-                    &mut self.frame_buf,
-                    source_name,
-                    view,
-                    buffer,
-                    size,
-                )?;
+                draw_status_line(&mut self.frame_buf, source_name, pager)?;
                 self.hide_cursor()?
             }
             Mode::Input(input_box) => {
-                draw_input_box(&mut self.frame_buf, input_box, size)?;
+                draw_input_box(
+                    &mut self.frame_buf,
+                    input_box,
+                    pager.screen_size,
+                )?;
                 self.show_cursor()?
             }
             Mode::Search(state) => {
                 let message = format!("search: \'{}\'", state.pattern());
-                draw_status_line(
-                    &mut self.frame_buf,
-                    &message,
-                    view,
-                    buffer,
-                    size,
-                )?;
+                draw_status_line(&mut self.frame_buf, &message, pager)?;
                 self.hide_cursor()?
             }
         }
@@ -192,7 +153,7 @@ fn draw_view(
             ))?;
         }
 
-        // TODO: 
+        // TODO:
         frame_buf
             .queue(rline.data.as_bytes())?
             .queue_cmd(cursor::MoveToNextLine(1))?;
@@ -221,11 +182,10 @@ fn draw_input_box(
 fn draw_status_line(
     frame_buf: &mut FrameBuf,
     message: &str,
-    view: &View,
-    buffer: &Buffer,
-    size: ScreenSize,
+    pager: &Pager,
 ) -> io::Result<()> {
-    let ScreenSize { width, height } = size;
+    let Pager { view, buffer, .. } = pager;
+    let ScreenSize { width, height } = pager.screen_size;
     let row_index =
         cmp::min(view.line_offset() + view.height(), buffer.line_count());
     let percentage = row_index
@@ -240,7 +200,7 @@ fn draw_status_line(
 
     frame_buf
         .queue_cmd(cursor::MoveToColumn(0))?
-        .queue_cmd(Print(truncate_right(message, size.width as usize - 15)))?
+        .queue_cmd(Print(truncate_right(message, width as usize - 15)))?
         .queue_cmd(cursor::MoveToColumn(width.saturating_sub(15)))?
         .queue_cmd(Print(format!(
             "({:>3}/{:>3}) {:>3}%",
@@ -251,4 +211,31 @@ fn draw_status_line(
         .queue_cmd(style::SetAttribute(Attribute::Reset))?;
 
     Ok(())
+}
+
+struct FrameBuf(Vec<u8>);
+
+impl FrameBuf {
+    fn new() -> FrameBuf {
+        FrameBuf(Vec::with_capacity(FRAME_BUFFER_INIT_CAPACITY))
+    }
+
+    fn get_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.0
+    }
+
+    fn queue(&mut self, buf: &[u8]) -> io::Result<&mut Self> {
+        self.0.write_all(buf)?;
+        Ok(self)
+    }
+
+    fn queue_cmd(&mut self, command: impl Command) -> io::Result<&mut Self> {
+        self.0.queue(command)?;
+        Ok(self)
+    }
+
+    fn flush(&mut self, stdout: &mut Stdout) -> io::Result<()> {
+        stdout.write_all(&self.0)?;
+        stdout.flush()
+    }
 }

@@ -1,11 +1,12 @@
 use std::{cmp, collections::VecDeque, ops::Range};
 
+use crate::log::debug;
+
 pub use buffer::{BYTES_PER_READ, Buffer, Line, LinesIter};
-pub use render::{ RenderedLine, RenderLineConfig };
+pub use render::{RenderLineConfig, RenderedLine};
 
 mod buffer;
 mod render;
-
 
 pub struct View {
     width: usize,
@@ -43,17 +44,21 @@ impl View {
         self.line_offset
     }
 
-    pub fn visible_lines(
-        &self,
-    ) -> impl Iterator<Item = &RenderedLine> {
+    pub fn visible_lines(&self) -> impl Iterator<Item = &RenderedLine> {
         self.render_cache.lines(self.line_offset, self.height)
     }
 
     pub fn ensure_visible_lines(&mut self, buffer: &Buffer) {
-        self.render_cache.ensure_lines(
-            self.line_offset..self.line_offset + self.height,
-            buffer,
-        );
+        if self.line_offset < buffer.line_count() {
+            self.render_cache.ensure_lines(
+                self.line_offset
+                    ..cmp::min(
+                        self.line_offset + self.height,
+                        buffer.line_count(),
+                    ),
+                buffer,
+            );
+        }
     }
 
     pub fn set_size(&mut self, width: usize, height: usize, buffer: &Buffer) {
@@ -133,9 +138,14 @@ impl RenderCache {
         }
     }
 
-    pub fn lines(&self, from: usize, take: usize) -> impl Iterator<Item = &RenderedLine> {
-        self.rlines.iter()
-            .skip_while(move |line| { line.line_number < from })
+    pub fn lines(
+        &self,
+        from: usize,
+        take: usize,
+    ) -> impl Iterator<Item = &RenderedLine> {
+        self.rlines
+            .iter()
+            .skip_while(move |line| line.line_number < from)
             .take(take)
     }
 
@@ -143,58 +153,63 @@ impl RenderCache {
         assert!(visible.end <= buffer.line_count());
 
         let range = self.range().unwrap_or_default();
-        eprintln!("cache: {:?} ({} lines)", range.clone(), range.len());
         if range.contains_range(&visible) {
             return;
         }
-        eprint!("visible: {:?} -> ", visible.clone());
 
         let new_range = desired_cache_range(visible, buffer.line_count());
         if range.contains_range(&new_range) {
             return;
         }
 
-        eprintln!("new_range: {:?} ({} lines)", new_range.clone(), new_range.len());
-
         self.relocate(new_range, buffer);
     }
 
     fn relocate(&mut self, new_range: Range<usize>, buffer: &Buffer) {
-        // TODO: the case new_range > old_range
         let old_range = self.range().unwrap_or_default();
+        let size_diff = new_range.len().saturating_sub(old_range.len());
+
+        debug!("old_range: {old_range:?} ({} lines)", old_range.len());
+
         if new_range.overlaps_right(&old_range) {
             let push_range = new_range.start..old_range.start;
-            eprint!("add front: {:?}", push_range.clone());
-            self.add_front(push_range, buffer);
+            debug!("add_front: {push_range:?}");
+            let pop_num = push_range.len() - size_diff;
+            self.add_front(buffer.lines_in(push_range), pop_num);
         } else if new_range.overlaps_left(&old_range) {
             let push_range = old_range.end..new_range.end;
-            eprint!("add back: {:?}", push_range.clone());
-            self.add_back(push_range, buffer);
+            debug!("add_back: {push_range:?}");
+            let pop_num = push_range.len() - size_diff;
+            self.add_back(buffer.lines_in(push_range), pop_num);
+        } else if new_range.contains_range(&old_range) {
+            let push_front_range = new_range.start..old_range.start;
+            let push_back_range = old_range.end..new_range.end;
+            debug!("add front: {push_front_range:?} back: {push_back_range:?}");
+            self.add_front(buffer.lines_in(push_front_range), 0);
+            self.add_back(buffer.lines_in(push_back_range), 0);
         } else {
             self.rlines.clear();
-            eprint!("add from empty");
-            for line in buffer.lines_in(new_range) {
-                self.rlines.push_back(self.render_line(line));
-            }
+            debug!("add from empty: {new_range:?}");
+            self.add_back(buffer.lines_in(new_range), 0);
         }
-
-        eprintln!(" -> {:?}\n", self.range().unwrap_or_default());
     }
 
-    fn add_front(&mut self, range: Range<usize>, buffer: &Buffer) {
-        for _ in 0..range.len() {
+    /// push lines to front and pop `pop_n` lines from back
+    fn add_front(&mut self, lines: LinesIter<'_>, pop_n: usize) {
+        for _ in 0..pop_n {
             self.rlines.pop_back();
         }
-        for line in buffer.lines_in(range).rev() {
+        for line in lines.rev() {
             self.rlines.push_front(self.render_line(line));
         }
     }
 
-    fn add_back(&mut self, range: Range<usize>, buffer: &Buffer) {
-        for _ in 0..range.len() {
+    /// push lines to back and pop `pop_n` lines from front
+    fn add_back(&mut self, lines: LinesIter<'_>, pop_n: usize) {
+        for _ in 0..pop_n {
             self.rlines.pop_front();
         }
-        for line in buffer.lines_in(range) {
+        for line in lines {
             self.rlines.push_back(self.render_line(line));
         }
     }
@@ -206,12 +221,15 @@ impl RenderCache {
             RenderLineConfig {
                 tab_stop: 4,
                 ..Default::default()
-            }
+            },
         )
     }
 
     fn range(&self) -> Option<Range<usize>> {
-        Some(self.rlines.front()?.line_number..self.rlines.back()?.line_number + 1)
+        Some(
+            self.rlines.front()?.line_number
+                ..self.rlines.back()?.line_number + 1,
+        )
     }
 }
 
@@ -227,7 +245,8 @@ fn desired_cache_range(
         .saturating_sub(visible.len())
         .saturating_sub(visible.start - start);
     let end = cmp::min(visible.end + right_remaining, buf_line_count);
-    let left_remaining = (visible.end + right_remaining).saturating_sub(buf_line_count);
+    let left_remaining =
+        (visible.end + right_remaining).saturating_sub(buf_line_count);
     start.saturating_sub(left_remaining)..end
 }
 
@@ -255,7 +274,10 @@ impl RangeExt for Range<usize> {
     }
 
     fn contains_range(&self, rhs: &Range<usize>) -> bool {
-        !self.is_empty() && !rhs.is_empty() && self.start <= rhs.start && self.end >= rhs.end
+        !self.is_empty()
+            && !rhs.is_empty()
+            && self.start <= rhs.start
+            && self.end >= rhs.end
     }
 }
 

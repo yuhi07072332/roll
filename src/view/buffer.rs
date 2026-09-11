@@ -58,10 +58,7 @@ impl Buffer {
     }
 
     pub fn lines_in<'a>(&'a self, range: Range<usize>) -> LinesIter<'a> {
-        LinesIter {
-            buf: self,
-            range,
-        }
+        LinesIter { buf: self, range }
     }
 
     pub fn lines<'a>(&'a self, from: usize, take: usize) -> LinesIter<'a> {
