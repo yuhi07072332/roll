@@ -115,7 +115,9 @@ impl View {
     }
 
     fn clamp_line_offset(&mut self, buffer: &Buffer) {
-        self.line_offset = cmp::min(self.line_offset, buffer.line_count() - 1);
+        if buffer.line_count() > 0 {
+            self.line_offset = cmp::min(self.line_offset, buffer.line_count() - 1);
+        }
     }
 
     fn clamp_col_offset(&self) -> usize {
