@@ -19,13 +19,15 @@ use input::{Key, SpecialKey::*};
 use output::{LineWrap, RenderConfig, Renderer, SourceName};
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
-use view::{
-    BYTES_PER_READ, Buffer, RenderLineConfig, View,
+use buffer::{
+    BYTES_PER_READ, Buffer, 
 };
+use view::{RenderLineConfig, View};
 
 pub mod log;
 
 mod input;
+mod buffer;
 mod output;
 mod search;
 mod terminal;
@@ -101,6 +103,7 @@ struct Pager {
     view: View,
     screen_size: ScreenSize,
     search_state: Option<SearchState>,
+    should_quit: bool,
 
     rl_config: RenderLineConfig,
 }
@@ -161,6 +164,7 @@ pub fn run() -> anyhow::Result<()> {
         view: View::new(),
         screen_size: terminal::size()?,
         search_state: None,
+        should_quit: false,
         rl_config: RenderLineConfig { tab_stop: 4 },
     };
 
@@ -179,8 +183,7 @@ fn run_loop(
     let mut renderer = Renderer::new(render_config);
     let mut mode = Mode::Normal;
 
-    let mut quit: bool = false;
-    while !quit {
+    while !pager.should_quit {
         renderer.resize_view(&mut pager);
         pager
             .view
@@ -196,7 +199,7 @@ fn run_loop(
             }
             Event::Terminal(e @ TermEvent::Key(_))
             | Event::Terminal(e @ TermEvent::Mouse(_)) => {
-                mode = handle_input(e, &mut pager, mode, || quit = true)?;
+                mode = handle_input(e, &mut pager, mode)?;
             }
             Event::BufferEof => {
                 pager.buffer.on_buffer_eof();
@@ -220,7 +223,7 @@ fn send_from_stdin(tx: Sender<Event>) -> anyhow::Result<()> {
     let mut stdin = io::stdin().lock();
 
     loop {
-        let mut buf = [0u8; BYTES_PER_READ];
+        let mut buf= [0u8; BYTES_PER_READ];
         let n = stdin.read(&mut buf)?;
 
         if n == 0 {
@@ -246,17 +249,16 @@ fn handle_input(
     event: TermEvent,
     pager: &mut Pager,
     mode: Mode,
-    on_exit: impl FnOnce(),
 ) -> anyhow::Result<Mode> {
     match mode {
         Mode::Normal if pager.search_state.is_some() => {
-            let mode = handle_normal_input(&event, pager, mode, on_exit);
+            let mode = handle_normal_input(&event, pager, mode);
             if let Mode::Normal = mode {
                 handle_search_input(event, pager);
             }
             Ok(mode)
         }
-        Mode::Normal => Ok(handle_normal_input(&event, pager, mode, on_exit)),
+        Mode::Normal => Ok(handle_normal_input(&event, pager, mode)),
         Mode::Input(input_box) => {
             match handle_inputbox_input(event, input_box) {
                 InputResult::Continue(input_box) => Ok(Mode::Input(input_box)),
@@ -294,7 +296,6 @@ fn handle_normal_input(
     event: &TermEvent,
     pager: &mut Pager,
     mode: Mode,
-    on_exit: impl FnOnce(),
 ) -> Mode {
     let Pager { buffer, view, .. } = pager;
 
@@ -302,8 +303,8 @@ fn handle_normal_input(
 
     match *event {
         TermEvent::Key(key_event) => match Key::new(key_event) {
-            Key::Char('q') => on_exit(),
-            Key::Sp(Esc) if pager.search_state.is_none() => on_exit(),
+            Key::Char('q') => pager.should_quit = true,
+            Key::Sp(Esc) if pager.search_state.is_none() => pager.should_quit = true,
 
             Key::Char('j') | Key::Sp(Down) | Key::Sp(Enter) => {
                 view.scroll_lines_clamp(1, buffer)

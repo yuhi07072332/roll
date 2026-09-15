@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use super::buffer::Buffer;
+use crate::buffer::Buffer;
 
 #[derive(Debug, Clone)]
 pub struct RenderLineConfig {

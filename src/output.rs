@@ -17,7 +17,8 @@ const FRAME_BUFFER_INIT_CAPACITY: usize = 1024;
 use crate::{
     InputBox, Mode, Pager,
     terminal::ScreenSize,
-    view::{Buffer, RenderedLine, render::raw_index},
+    buffer::Buffer,
+    view::{RenderedLine, render::raw_index},
 };
 
 pub enum SourceName {
@@ -202,6 +203,7 @@ fn draw_line(
     let mut current_line_width = 0;
     let mut is_highlighting = false;
     for (rx, gr) in rline.data.grapheme_indices(true) {
+        // TODO: handle control characters(escape sequence, etc.)
         let gr_width = gr.width();
         current_line_width += gr_width;
         if current_line_width > pager.view.width() {

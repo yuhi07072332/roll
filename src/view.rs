@@ -1,11 +1,10 @@
 use std::{cmp, collections::VecDeque, ops::Range};
 
-use crate::log::debug;
+use super::log::debug;
 
-pub use buffer::{BYTES_PER_READ, Buffer, Line, LinesIter};
+use super::buffer::{Buffer, Line, LinesIter};
 pub use render::{RenderLineConfig, RenderedLine};
 
-pub mod buffer;
 pub mod render;
 
 pub struct View {

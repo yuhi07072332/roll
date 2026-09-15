@@ -5,7 +5,7 @@ use std::{
     str::Utf8Error,
 };
 
-use crate::view::{Buffer, LinesIter};
+use crate::buffer::{Buffer, LinesIter};
 
 use regex::{Error as RegexError, Regex};
 
