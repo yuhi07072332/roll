@@ -69,10 +69,6 @@ impl Buffer {
         self.line_starts.len().saturating_sub(1)
     }
 
-    fn lines_from<'a>(&'a self, from: usize) -> LinesIter<'a> {
-        self.lines_in(from..self.line_count())
-    }
-
     fn from_bytes(data: Vec<u8>) -> Buffer {
         let mut line_starts: Vec<usize> = Vec::new();
         scan_line_starts(&mut line_starts, &data, 0);
@@ -82,6 +78,11 @@ impl Buffer {
             line_starts,
             is_reading: false,
         }
+    }
+
+    #[allow(unused)]
+    fn lines_from<'a>(&'a self, from: usize) -> LinesIter<'a> {
+        self.lines_in(from..self.line_count())
     }
 
     fn append_bytes(&mut self, bytes: &[u8]) {

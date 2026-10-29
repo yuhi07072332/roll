@@ -22,7 +22,7 @@ use terminal::{ScreenSize, TerminalGuard};
 use buffer::{
     BYTES_PER_READ, Buffer, 
 };
-use view::{RenderLineConfig, View};
+use view::{DisplayLineConfig, View};
 
 pub mod log;
 
@@ -105,7 +105,7 @@ struct Pager {
     search_state: Option<SearchState>,
     should_quit: bool,
 
-    rl_config: RenderLineConfig,
+    rl_config: DisplayLineConfig,
 }
 
 pub fn print_error(message: impl std::fmt::Display) {
@@ -165,7 +165,7 @@ pub fn run() -> anyhow::Result<()> {
         screen_size: terminal::size()?,
         search_state: None,
         should_quit: false,
-        rl_config: RenderLineConfig { tab_stop: 4 },
+        rl_config: DisplayLineConfig { tab_stop: 4 },
     };
 
     run_loop(&args, render_config, pager, rx)?;

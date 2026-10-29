@@ -18,7 +18,7 @@ use crate::{
     InputBox, Mode, Pager,
     terminal::ScreenSize,
     buffer::Buffer,
-    view::{RenderedLine, render::raw_index},
+    view::{DisplayLine, display_line::display_idx_to_raw_idx},
 };
 
 pub enum SourceName {
@@ -181,7 +181,7 @@ fn draw_view(
 
 fn draw_line(
     frame_buf: &mut FrameBuf,
-    rline: &RenderedLine,
+    rline: &DisplayLine,
     pager: &Pager,
     config: &RenderConfig,
     line_begin_col: u16,
@@ -221,7 +221,7 @@ fn draw_line(
             }
         }
 
-        let raw_index = raw_index(rx, raw, &pager.rl_config);
+        let raw_index = display_idx_to_raw_idx(rx, raw, &pager.rl_config);
         if let Some(hl) = highlights.get(hl_index) {
             if hl.start == raw_index {
                 frame_buf.queue(b"\x1b[7m")?;

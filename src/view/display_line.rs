@@ -1,30 +1,27 @@
-use std::ops::Range;
-
-use crate::buffer::Buffer;
-
 #[derive(Debug, Clone)]
-pub struct RenderLineConfig {
+pub struct DisplayLineConfig {
     pub tab_stop: usize,
 }
 
-impl Default for RenderLineConfig {
+impl Default for DisplayLineConfig {
     fn default() -> Self {
-        RenderLineConfig { tab_stop: 4 }
+        DisplayLineConfig { tab_stop: 4 }
     }
 }
+
 #[derive(Debug)]
-pub struct RenderedLine {
+pub struct DisplayLine {
     pub data: String,
     pub line_number: usize,
 }
 
-impl RenderedLine {
+impl DisplayLine {
     pub fn new(
         line: &[u8],
         line_number: usize,
-        config: &RenderLineConfig,
-    ) -> RenderedLine {
-        let raw = render_raw_line(line, config);
+        config: &DisplayLineConfig,
+    ) -> DisplayLine {
+        let raw = expand_tab(line, config);
         let data = match String::from_utf8(raw) {
             Ok(text) => text,
             Err(err) => {
@@ -41,14 +38,14 @@ impl RenderedLine {
             }
         };
 
-        RenderedLine { data, line_number }
+        DisplayLine { data, line_number }
     }
 }
 
-pub fn raw_index(
-    rendered_byte_index: usize,
+pub fn display_idx_to_raw_idx(
+    display_idx: usize,
     raw: &[u8],
-    rl_config: &RenderLineConfig,
+    rl_config: &DisplayLineConfig,
 ) -> usize {
     let tab_stop = rl_config.tab_stop;
     let mut rx = 0;
@@ -59,7 +56,7 @@ pub fn raw_index(
             }
             _ => rx += 1,
         }
-        if rx > rendered_byte_index {
+        if rx > display_idx {
             return i;
         }
     }
@@ -68,10 +65,10 @@ pub fn raw_index(
 }
 
 #[allow(clippy::same_item_push)]
-fn render_raw_line(line: &[u8], config: &RenderLineConfig) -> Vec<u8> {
-    let RenderLineConfig { tab_stop } = config;
+fn expand_tab(line: &[u8], config: &DisplayLineConfig) -> Vec<u8> {
+    let DisplayLineConfig { tab_stop } = config;
 
-    let mut rendered: Vec<u8> = Vec::with_capacity(line.len());
+    let mut dline: Vec<u8> = Vec::with_capacity(line.len());
 
     let mut rx = 0;
     for c in line.iter() {
@@ -79,17 +76,17 @@ fn render_raw_line(line: &[u8], config: &RenderLineConfig) -> Vec<u8> {
             b'\t' => {
                 let spaces = tab_stop - (rx % tab_stop);
                 for _ in 0..spaces {
-                    rendered.push(b' ');
+                    dline.push(b' ');
                 }
                 rx += spaces - 1;
             }
-            _ => rendered.push(*c),
+            _ => dline.push(*c),
         }
 
         rx += 1;
     }
 
-    rendered
+    dline
 }
 
 #[cfg(test)]
@@ -98,32 +95,32 @@ mod tests {
 
     #[test]
     fn render_tab_to_space() {
-        let config = RenderLineConfig { tab_stop: 4 };
+        let config = DisplayLineConfig { tab_stop: 4 };
 
         let s1 = b"\t";
         let s2 = b" \t";
         let s3 = b"  \t";
         let s4 = b"   \t";
         let s5 = b"\t\tstd::cout\t<< 42";
-        assert_eq!(render_raw_line(s1, &config), b"    ");
-        assert_eq!(render_raw_line(s2, &config), b"    ");
-        assert_eq!(render_raw_line(s3, &config), b"    ");
-        assert_eq!(render_raw_line(s4, &config), b"    ");
-        assert_eq!(render_raw_line(s5, &config), b"        std::cout   << 42");
+        assert_eq!(expand_tab(s1, &config), b"    ");
+        assert_eq!(expand_tab(s2, &config), b"    ");
+        assert_eq!(expand_tab(s3, &config), b"    ");
+        assert_eq!(expand_tab(s4, &config), b"    ");
+        assert_eq!(expand_tab(s5, &config), b"        std::cout   << 42");
     }
 
     #[test]
     fn raw_index_computes_rx_to_cx() {
         let raw = b"hello\tworld";
-        let rl_config = RenderLineConfig { tab_stop: 4 };
-        let rline = RenderedLine::new(raw, 1, &rl_config);
+        let rl_config = DisplayLineConfig { tab_stop: 4 };
+        let rline = DisplayLine::new(raw, 1, &rl_config);
 
         assert_eq!(rline.data, "hello   world".to_string());
-        assert_eq!(raw_index(3, raw, &rl_config), 3);
-        assert_eq!(raw_index(5, raw, &rl_config), 5);
-        assert_eq!(raw_index(6, raw, &rl_config), 5);
-        assert_eq!(raw_index(7, raw, &rl_config), 5);
-        assert_eq!(raw_index(8, raw, &rl_config), 6);
-        assert_eq!(raw_index(9, raw, &rl_config), 7);
+        assert_eq!(display_idx_to_raw_idx(3, raw, &rl_config), 3);
+        assert_eq!(display_idx_to_raw_idx(5, raw, &rl_config), 5);
+        assert_eq!(display_idx_to_raw_idx(6, raw, &rl_config), 5);
+        assert_eq!(display_idx_to_raw_idx(7, raw, &rl_config), 5);
+        assert_eq!(display_idx_to_raw_idx(8, raw, &rl_config), 6);
+        assert_eq!(display_idx_to_raw_idx(9, raw, &rl_config), 7);
     }
 }

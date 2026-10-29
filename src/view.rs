@@ -3,9 +3,9 @@ use std::{cmp, collections::VecDeque, ops::Range};
 use super::log::debug;
 
 use super::buffer::{Buffer, Line, LinesIter};
-pub use render::{RenderLineConfig, RenderedLine};
+pub use display_line::{DisplayLineConfig, DisplayLine};
 
-pub mod render;
+pub mod display_line;
 
 pub struct View {
     width: usize,
@@ -43,14 +43,14 @@ impl View {
         self.line_offset
     }
 
-    pub fn visible_lines(&self) -> impl Iterator<Item = &RenderedLine> {
+    pub fn visible_lines(&self) -> impl Iterator<Item = &DisplayLine> {
         self.render_cache.lines(self.line_offset, self.height)
     }
 
     pub fn ensure_visible_lines(
         &mut self,
         buffer: &Buffer,
-        rl_config: &RenderLineConfig,
+        rl_config: &DisplayLineConfig,
     ) {
         if self.line_offset < buffer.line_count() {
             self.render_cache.ensure_lines(
@@ -130,7 +130,7 @@ fn max_line_width(lines: LinesIter<'_>) -> usize {
 }
 
 struct RenderCache {
-    rlines: VecDeque<RenderedLine>,
+    rlines: VecDeque<DisplayLine>,
 }
 
 impl RenderCache {
@@ -146,7 +146,7 @@ impl RenderCache {
         &self,
         from: usize,
         take: usize,
-    ) -> impl Iterator<Item = &RenderedLine> {
+    ) -> impl Iterator<Item = &DisplayLine> {
         self.rlines
             .iter()
             .skip_while(move |line| line.line_number < from)
@@ -157,7 +157,7 @@ impl RenderCache {
         &mut self,
         visible: Range<usize>,
         buffer: &Buffer,
-        rl_config: &RenderLineConfig,
+        rl_config: &DisplayLineConfig,
     ) {
         assert!(visible.end <= buffer.line_count());
 
@@ -178,7 +178,7 @@ impl RenderCache {
         &mut self,
         new_range: Range<usize>,
         buffer: &Buffer,
-        rl_config: &RenderLineConfig,
+        rl_config: &DisplayLineConfig,
     ) {
         let old_range = self.range().unwrap_or_default();
         let size_diff = new_range.len().saturating_sub(old_range.len());
@@ -217,7 +217,7 @@ impl RenderCache {
         &mut self,
         lines: LinesIter<'a>,
         pop_n: usize,
-        rl_config: &RenderLineConfig,
+        rl_config: &DisplayLineConfig,
     ) {
         for _ in 0..pop_n {
             self.rlines.pop_back();
@@ -232,7 +232,7 @@ impl RenderCache {
         &mut self,
         lines: LinesIter<'a>,
         pop_n: usize,
-        rl_config: &RenderLineConfig,
+        rl_config: &DisplayLineConfig,
     ) {
         for _ in 0..pop_n {
             self.rlines.pop_front();
@@ -245,9 +245,9 @@ impl RenderCache {
     fn render_line(
         &self,
         (line_number, text): Line<'_>,
-        rl_config: &RenderLineConfig,
-    ) -> RenderedLine {
-        RenderedLine::new(text, line_number, rl_config)
+        rl_config: &DisplayLineConfig,
+    ) -> DisplayLine {
+        DisplayLine::new(text, line_number, rl_config)
     }
 
     fn range(&self) -> Option<Range<usize>> {
