@@ -6,7 +6,7 @@ fn main() -> ExitCode {
     #[cfg(debug_assertions)]
     log::init_logger();
 
-    if let Err(err) = roll::run() {
+    if let Err(err) = roll::init() {
         roll::print_error(err);
         return ExitCode::FAILURE;
     }

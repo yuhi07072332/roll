@@ -15,7 +15,6 @@ pub struct ScreenSize {
     pub height: u16,
 }
 
-#[derive(Debug)]
 pub struct TerminalGuard {}
 
 impl TerminalGuard {

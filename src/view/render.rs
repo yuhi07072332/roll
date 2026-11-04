@@ -1,11 +1,12 @@
+
 #[derive(Debug, Clone)]
-pub struct DisplayLineConfig {
+pub struct RenderConfig {
     pub tab_stop: usize,
 }
 
-impl Default for DisplayLineConfig {
+impl Default for RenderConfig {
     fn default() -> Self {
-        DisplayLineConfig { tab_stop: 4 }
+        RenderConfig { tab_stop: 4 }
     }
 }
 
@@ -19,7 +20,7 @@ impl DisplayLine {
     pub fn new(
         line: &[u8],
         line_number: usize,
-        config: &DisplayLineConfig,
+        config: &RenderConfig,
     ) -> DisplayLine {
         let raw = expand_tab(line, config);
         let data = match String::from_utf8(raw) {
@@ -45,9 +46,9 @@ impl DisplayLine {
 pub fn display_idx_to_raw_idx(
     display_idx: usize,
     raw: &[u8],
-    rl_config: &DisplayLineConfig,
+    config: &RenderConfig,
 ) -> usize {
-    let tab_stop = rl_config.tab_stop;
+    let tab_stop = config.tab_stop;
     let mut rx = 0;
     for (i, c) in raw.iter().enumerate() {
         match *c {
@@ -65,8 +66,8 @@ pub fn display_idx_to_raw_idx(
 }
 
 #[allow(clippy::same_item_push)]
-fn expand_tab(line: &[u8], config: &DisplayLineConfig) -> Vec<u8> {
-    let DisplayLineConfig { tab_stop } = config;
+fn expand_tab(line: &[u8], config: &RenderConfig) -> Vec<u8> {
+    let RenderConfig { tab_stop } = config;
 
     let mut dline: Vec<u8> = Vec::with_capacity(line.len());
 
@@ -95,7 +96,7 @@ mod tests {
 
     #[test]
     fn render_tab_to_space() {
-        let config = DisplayLineConfig { tab_stop: 4 };
+        let config = RenderConfig { tab_stop: 4 };
 
         let s1 = b"\t";
         let s2 = b" \t";
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn raw_index_computes_rx_to_cx() {
         let raw = b"hello\tworld";
-        let rl_config = DisplayLineConfig { tab_stop: 4 };
+        let rl_config = RenderConfig { tab_stop: 4 };
         let rline = DisplayLine::new(raw, 1, &rl_config);
 
         assert_eq!(rline.data, "hello   world".to_string());

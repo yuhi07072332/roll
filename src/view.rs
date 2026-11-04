@@ -3,9 +3,11 @@ use std::{cmp, collections::VecDeque, ops::Range};
 use super::log::debug;
 
 use super::buffer::{Buffer, Line, LinesIter};
-pub use display_line::{DisplayLineConfig, DisplayLine};
+use render::{DisplayLine};
 
-pub mod display_line;
+pub use render::RenderConfig;
+
+pub mod render;
 
 pub struct View {
     width: usize,
@@ -50,7 +52,7 @@ impl View {
     pub fn ensure_visible_lines(
         &mut self,
         buffer: &Buffer,
-        rl_config: &DisplayLineConfig,
+        dl_config: &RenderConfig,
     ) {
         if self.line_offset < buffer.line_count() {
             self.render_cache.ensure_lines(
@@ -60,7 +62,7 @@ impl View {
                         buffer.line_count(),
                     ),
                 buffer,
-                rl_config,
+                dl_config,
             );
         }
     }
@@ -129,6 +131,12 @@ fn max_line_width(lines: LinesIter<'_>) -> usize {
     lines.map(|(_, line)| line.len()).max().unwrap_or(0)
 }
 
+pub struct DisplayRow<'a> {
+    data: &'a str,
+    line_number: usize,
+    highlights: &'a [Range<usize>]
+}
+
 struct RenderCache {
     rlines: VecDeque<DisplayLine>,
 }
@@ -157,7 +165,7 @@ impl RenderCache {
         &mut self,
         visible: Range<usize>,
         buffer: &Buffer,
-        rl_config: &DisplayLineConfig,
+        dl_config: &RenderConfig,
     ) {
         assert!(visible.end <= buffer.line_count());
 
@@ -171,14 +179,14 @@ impl RenderCache {
             return;
         }
 
-        self.relocate(new_range, buffer, rl_config);
+        self.relocate(new_range, buffer, dl_config);
     }
 
     fn relocate(
         &mut self,
         new_range: Range<usize>,
         buffer: &Buffer,
-        rl_config: &DisplayLineConfig,
+        dl_config: &RenderConfig,
     ) {
         let old_range = self.range().unwrap_or_default();
         let size_diff = new_range.len().saturating_sub(old_range.len());
@@ -190,25 +198,25 @@ impl RenderCache {
             let pop_num = push_range.len() - size_diff;
             debug!("add_front: {push_range:?}");
 
-            self.add_front(buffer.lines_in(push_range), pop_num, rl_config);
+            self.add_front(buffer.lines_in(push_range), pop_num, dl_config);
         } else if new_range.overlaps_left(&old_range) {
             let push_range = old_range.end..new_range.end;
             let pop_num = push_range.len() - size_diff;
             debug!("add_back: {push_range:?}");
 
-            self.add_back(buffer.lines_in(push_range), pop_num, rl_config);
+            self.add_back(buffer.lines_in(push_range), pop_num, dl_config);
         } else if new_range.contains_range(&old_range) {
             let push_front_range = new_range.start..old_range.start;
             let push_back_range = old_range.end..new_range.end;
             debug!("add front: {push_front_range:?} back: {push_back_range:?}");
 
-            self.add_front(buffer.lines_in(push_front_range), 0, rl_config);
-            self.add_back(buffer.lines_in(push_back_range), 0, rl_config);
+            self.add_front(buffer.lines_in(push_front_range), 0, dl_config);
+            self.add_back(buffer.lines_in(push_back_range), 0, dl_config);
         } else {
             self.rlines.clear();
             debug!("add from empty: {new_range:?}");
 
-            self.add_back(buffer.lines_in(new_range), 0, rl_config);
+            self.add_back(buffer.lines_in(new_range), 0, dl_config);
         }
     }
 
@@ -217,13 +225,13 @@ impl RenderCache {
         &mut self,
         lines: LinesIter<'a>,
         pop_n: usize,
-        rl_config: &DisplayLineConfig,
+        dl_config: &RenderConfig,
     ) {
         for _ in 0..pop_n {
             self.rlines.pop_back();
         }
         for line in lines.rev() {
-            self.rlines.push_front(self.render_line(line, rl_config));
+            self.rlines.push_front(self.render_line(line, dl_config));
         }
     }
 
@@ -232,22 +240,22 @@ impl RenderCache {
         &mut self,
         lines: LinesIter<'a>,
         pop_n: usize,
-        rl_config: &DisplayLineConfig,
+        dl_config: &RenderConfig,
     ) {
         for _ in 0..pop_n {
             self.rlines.pop_front();
         }
         for line in lines {
-            self.rlines.push_back(self.render_line(line, rl_config));
+            self.rlines.push_back(self.render_line(line, dl_config));
         }
     }
 
     fn render_line(
         &self,
         (line_number, text): Line<'_>,
-        rl_config: &DisplayLineConfig,
+        dl_config: &RenderConfig,
     ) -> DisplayLine {
-        DisplayLine::new(text, line_number, rl_config)
+        DisplayLine::new(text, line_number, dl_config)
     }
 
     fn range(&self) -> Option<Range<usize>> {

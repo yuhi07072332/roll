@@ -1,17 +1,22 @@
 use std::{
-    fs::{self},
+    fs::{ self },
     io,
     ops::Range,
     path::Path,
 };
 
+use block::BlockCache;
+
 pub type Line<'a> = (usize, &'a [u8]);
 
 pub const BYTES_PER_READ: usize = 512;
 
+mod block;
+
+
 #[derive(Debug)]
 pub struct Buffer {
-    data: Vec<u8>,
+    data: BlockCache,
     line_starts: Vec<usize>,
     is_reading: bool,
 }
@@ -69,15 +74,20 @@ impl Buffer {
         self.line_starts.len().saturating_sub(1)
     }
 
-    fn from_bytes(data: Vec<u8>) -> Buffer {
-        let mut line_starts: Vec<usize> = Vec::new();
-        scan_line_starts(&mut line_starts, &data, 0);
+    pub fn line_number_width(&self) -> u16 {
+        (self.line_count().checked_ilog10().unwrap_or(0) + 1) as u16
+    }
 
-        Buffer {
+    fn from_bytes(data: Vec<u8>) -> Buffer {
+        let mut buf = Buffer {
             data,
-            line_starts,
-            is_reading: false,
-        }
+            line_starts: Vec::new(),
+            is_reading: false
+        };
+
+        buf.scan_line_starts(0);
+
+        buf
     }
 
     #[allow(unused)]
@@ -95,7 +105,27 @@ impl Buffer {
 
         let old_len = self.data.len();
         self.data.extend_from_slice(bytes);
-        scan_line_starts(&mut self.line_starts, &self.data, old_len);
+        self.scan_line_starts(old_len);
+    }
+
+    fn scan_line_starts(&mut self, begin_byte: usize) {
+        if self.line_starts.is_empty() {
+            self.line_starts.push(begin_byte)
+        }
+
+        self.line_starts.extend(
+            self.data.iter()
+                .enumerate()
+                .skip(begin_byte)
+                .filter_map(|(idx, c)| (*c == b'\n').then_some(idx + 1)),
+        );
+
+        // Add sentinel for the last line
+        if let Some(c) = self.data.last()
+        && *c != b'\n'
+        {
+            self.line_starts.push(self.data.len());
+        }
     }
 }
 
@@ -106,26 +136,6 @@ impl Default for Buffer {
             line_starts: Vec::new(),
             is_reading: true,
         }
-    }
-}
-
-fn scan_line_starts(out: &mut Vec<usize>, data: &[u8], from_nbyte: usize) {
-    if out.is_empty() {
-        out.push(from_nbyte)
-    }
-
-    out.extend(
-        data.iter()
-            .enumerate()
-            .skip(from_nbyte)
-            .filter_map(|(idx, c)| (*c == b'\n').then_some(idx + 1)),
-    );
-
-    // Add sentinel for the last line
-    if let Some(c) = data.last()
-        && *c != b'\n'
-    {
-        out.push(data.len());
     }
 }
 
@@ -165,6 +175,7 @@ impl<'a> DoubleEndedIterator for LinesIter<'a> {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,9 +191,9 @@ mod tests {
 
         assert!(!buf.is_reading());
         assert_eq!(buf.line_count(), 3);
-        assert_eq!(iter.next(), Some((0usize, &b"first line"[..])));
-        assert_eq!(iter.next(), Some((1usize, &b"second line"[..])));
-        assert_eq!(iter.next(), Some((2usize, &b"third line"[..])));
+        assert_eq!(iter.next(), Some((0, &b"first line"[..])));
+        assert_eq!(iter.next(), Some((1, &b"second line"[..])));
+        assert_eq!(iter.next(), Some((2, &b"third line"[..])));
     }
 
     #[test]

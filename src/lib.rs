@@ -16,19 +16,21 @@ use crossterm::{
 };
 
 use input::{Key, SpecialKey::*};
-use output::{LineWrap, RenderConfig, Renderer, SourceName};
+use screen::Screen;
 use search::{SearchDirection, SearchState};
 use terminal::{ScreenSize, TerminalGuard};
 use buffer::{
     BYTES_PER_READ, Buffer, 
 };
-use view::{DisplayLineConfig, View};
+use view::{RenderConfig, View};
+
+use crate::screen::Frame;
 
 pub mod log;
 
 mod input;
 mod buffer;
-mod output;
+mod screen;
 mod search;
 mod terminal;
 mod view;
@@ -98,14 +100,30 @@ impl InputBox {
     }
 }
 
+enum SourceName {
+    FileName(String),
+    Stdin,
+}
+
+enum LineWrap {
+    Disabled,
+    HardWrap,
+    SoftWrap,
+}
+
 struct Pager {
     buffer: Buffer,
     view: View,
-    screen_size: ScreenSize,
+    screen_width: usize,
+    screen_height: usize,
     search_state: Option<SearchState>,
     should_quit: bool,
+    bottom_line: String,
 
-    rl_config: DisplayLineConfig,
+    dl_config: RenderConfig,
+    source_name: SourceName,
+    line_numbers: bool,
+    wrap: LineWrap,
 }
 
 pub fn print_error(message: impl std::fmt::Display) {
@@ -121,10 +139,11 @@ fn print_buffer(buffer: &Buffer) -> io::Result<()> {
     Ok(())
 }
 
-pub fn run() -> anyhow::Result<()> {
+pub fn init() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let (tx, rx) = mpsc::channel::<Event>();
+    let mut read_pipe_input_thread = None;
 
     let source_name;
 
@@ -135,15 +154,15 @@ pub fn run() -> anyhow::Result<()> {
             .context(format!("failed to read file: {}", file_path_str))?
     } else {
         if io::stdin().is_tty() {
-            bail!("missing file or piped stdin");
+            bail!("roll: missing file or piped stdin");
         }
         source_name = SourceName::Stdin;
         let stdin_sender = tx.clone();
-        thread::spawn(move || send_from_stdin(stdin_sender));
+        read_pipe_input_thread = Some(thread::spawn(move || read_pipe_input(stdin_sender)));
         Buffer::from_stdin()
     };
 
-    thread::spawn(move || send_from_terminal_event(tx));
+    let read_terminal_event_thread = thread::spawn(move || read_terminal_event(tx));
 
     let wrap = if args.hard_wrap {
         LineWrap::HardWrap
@@ -153,49 +172,92 @@ pub fn run() -> anyhow::Result<()> {
         LineWrap::Disabled
     };
 
-    let render_config = output::RenderConfig {
+    let ScreenSize{width, height} = terminal::size()?;
+
+    let pager = Pager {
+        buffer,
+        view: View::new(),
+        screen_width: width as usize,
+        screen_height: height as usize,
+        search_state: None,
+        should_quit: false,
+        bottom_line: String::new(),
+        dl_config: RenderConfig { tab_stop: 4 },
         line_numbers: args.line_numbers,
         source_name,
         wrap,
     };
 
-    let pager = Pager {
-        buffer,
-        view: View::new(),
-        screen_size: terminal::size()?,
-        search_state: None,
-        should_quit: false,
-        rl_config: DisplayLineConfig { tab_stop: 4 },
-    };
+    run_loop(&args, pager, rx)?;
 
-    run_loop(&args, render_config, pager, rx)?;
+    if let Some(thread) = read_pipe_input_thread {
+        thread.join().unwrap()?;
+    }
+
+    read_terminal_event_thread.join().unwrap()?;
 
     Ok(())
 }
 
+fn read_pipe_input(tx: Sender<Event>) -> anyhow::Result<()> {
+    let mut stdin = io::stdin().lock();
+
+    loop {
+        let mut buf= [0u8; BYTES_PER_READ];
+        let n = stdin.read(&mut buf)?;
+
+        if n == 0 {
+            break;
+        }
+        tx.send(Event::BufferRead {
+            n,
+            bytes: Box::new(buf),
+        })?;
+    }
+
+    tx.send(Event::BufferEof)?;
+    Ok(())
+}
+
+fn read_terminal_event(tx: Sender<Event>) -> anyhow::Result<()> {
+    loop {
+        tx.send(Event::Terminal(event::read()?))?;
+    }
+}
+
 fn run_loop(
     args: &Args,
-    render_config: RenderConfig,
     mut pager: Pager,
     receiver: Receiver<Event>,
 ) -> anyhow::Result<()> {
     let terminal = TerminalGuard::init()?;
-    let mut renderer = Renderer::new(render_config);
+    let mut screen = Screen::new();
     let mut mode = Mode::Normal;
 
     while !pager.should_quit {
-        renderer.resize_view(&mut pager);
+        resize_view(&mut pager);
         pager
             .view
-            .ensure_visible_lines(&pager.buffer, &pager.rl_config);
-        renderer.draw_frame(&pager, &mode)?;
+            .ensure_visible_lines(&pager.buffer, &pager.dl_config);
+
+        let frame = Frame {
+            width: pager.screen_width,
+            height: pager.screen_height,
+            buffer: &pager.buffer,
+            view: &pager.view,
+            bottom_line: &pager.bottom_line,
+            is_input_mode: matches!(mode, Mode::Input(_)),
+        };
+
+        screen.draw_frame(&frame)?;
 
         match receiver.recv()? {
             Event::BufferRead { n, bytes } => {
                 pager.buffer.on_buffer_read(n, bytes);
             }
             Event::Terminal(TermEvent::Resize(width, height)) => {
-                pager.screen_size = ScreenSize { width, height };
+                pager.screen_width = width as usize;
+                pager.screen_height = height as usize;
             }
             Event::Terminal(e @ TermEvent::Key(_))
             | Event::Terminal(e @ TermEvent::Mouse(_)) => {
@@ -219,30 +281,15 @@ fn run_loop(
     Ok(())
 }
 
-fn send_from_stdin(tx: Sender<Event>) -> anyhow::Result<()> {
-    let mut stdin = io::stdin().lock();
-
-    loop {
-        let mut buf= [0u8; BYTES_PER_READ];
-        let n = stdin.read(&mut buf)?;
-
-        if n == 0 {
-            break;
-        }
-        tx.send(Event::BufferRead {
-            n,
-            bytes: Box::new(buf),
-        })?;
-    }
-
-    tx.send(Event::BufferEof)?;
-    Ok(())
-}
-
-fn send_from_terminal_event(tx: Sender<Event>) -> anyhow::Result<()> {
-    loop {
-        tx.send(Event::Terminal(event::read()?))?;
-    }
+fn resize_view(pager: &mut Pager) {
+    let width = if pager.line_numbers {
+        pager.screen_width
+            .saturating_sub(pager.buffer.line_number_width() as usize + 1)
+    } else {
+        pager.screen_width as usize
+    };
+    let height = (pager.screen_height as usize).saturating_sub(1);
+    pager.view.set_size(width, height, &pager.buffer);
 }
 
 fn handle_input(
